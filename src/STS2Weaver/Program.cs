@@ -32,6 +32,8 @@ string targetPath = args[0], hooksPath = args[1], manifestPath = args[2], output
 var resolver = new DefaultAssemblyResolver();
 resolver.AddSearchDirectory(Path.GetDirectoryName(Path.GetFullPath(targetPath)));
 resolver.AddSearchDirectory(Path.GetDirectoryName(Path.GetFullPath(hooksPath)));
+// 核心库搜索目录:类型兼容检查需要解析 System.* 类型,否则全部 fail-open
+resolver.AddSearchDirectory(Path.GetDirectoryName(typeof(object).Assembly.Location));
 
 var readParams = new ReaderParameters { AssemblyResolver = resolver, ReadWrite = false };
 var targetAsm = AssemblyDefinition.ReadAssembly(targetPath, readParams);
@@ -191,7 +193,7 @@ void WeaveOne(PatchEntry p)
     var returnsValue = target.ReturnType.MetadataType != MetadataType.Void;
 
     // __result 局部变量(按需创建)
-    VariableDefinition resultVar = null;
+    VariableDefinition resultVar = null!;
     VariableDefinition EnsureResultVar()
     {
         if (!returnsValue) throw new InvalidOperationException("目标方法返回 void,钩子不能绑定 __result");
@@ -347,7 +349,7 @@ static bool IsAssignableFrom(TypeReference hookType, TypeReference targetType)
     if (hookType.FullName == targetType.FullName) return true;
     if (IsObjectType(hookType)) return true;
     if (hookType.FullName == "System.ValueType") return true;
-    TypeDefinition ht = null, tt = null;
+    TypeDefinition ht = null!, tt = null!;
     try { ht = hookType.Resolve(); tt = targetType.Resolve(); }
     catch (AssemblyResolutionException) { }   // Resolve 失败抛异常(非返回 null):放宽,运行时兜底
     if (ht == null || tt == null) return true; // 解析不出(泛型/外部程序集)放宽,运行时兜底

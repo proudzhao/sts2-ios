@@ -1,0 +1,5 @@
+{
+  "patches": [
+    { "targetType": "Smoke.Calculator", "targetMethod": "Mul", "kind": "prefix", "hookType": "Smoke.Hooks.Hooks", "hookMethod": "BadTypePrefix" }
+  ]
+}

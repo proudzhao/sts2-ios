@@ -1,0 +1,7 @@
+{
+  "patches": [
+    { "targetType": "Smoke.Calculator", "targetMethod": "Add", "kind": "prefix", "hookType": "Smoke.Hooks.Hooks", "hookMethod": "AddPrefix" },
+    { "targetType": "Smoke.Calculator", "targetMethod": "Greet", "kind": "postfix", "hookType": "Smoke.Hooks.Hooks", "hookMethod": "GreetPostfix" },
+    { "targetType": "Smoke.Calculator", "targetMethod": "Shout", "kind": "postfix", "hookType": "Smoke.Hooks.Hooks", "hookMethod": "ShoutPostfix" }
+  ]
+}
