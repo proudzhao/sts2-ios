@@ -143,7 +143,7 @@ public static class SnapshotPatch
             // slot tree — so Load does not copy it back into the live save.
             SetSlotFloor(slot, GetCurrentFloor());
 
-            PatchHelper.Log($"[Snapshot] saved slot {slot} -> {dest}");
+            PatchHelper.Log($"[Snapshot] saved slot {slot} -> {SlotPath(slot)}");
 
             // Reflect the new occupancy on this slot's Save + Load buttons.
             RefreshLabels((Node)button);
