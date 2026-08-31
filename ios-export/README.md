@@ -18,17 +18,21 @@
 - 一个 `BeforeTargets="IlcCompile"` 的 MSBuild target，在 NativeAOT 编译器（ILC）读取托管程序集
   **之前**，用我们织入好的 sts2.dll 覆盖掉中间产物路径的占位 dll
 - 所有 200+ 依赖程序集作为 `<ReferencePath>` 提供给 ILC 解析
-- `TrimMode=partial` + 显式 root，保住游戏靠反射注册的 1624 个类型不被裁剪
+- 不设 `TrimMode=partial`:依赖 Godot targets 的 `TrimmerRootAssembly=$(TargetName)` 完整保根主程序集
+  (游戏 1624 个反射注册类型全在 sts2.dll 内),另显式 root `STS2MobileIos`;不保根全部依赖——
+  那会逼 ILC 加载 Steamworks.NET 里 Windows 专用的显式内存布局类型
 
 这样 ILC 实际编译的是我们的织入版游戏程序集，assembly_name=sts2 天然满足 Godot 的三处硬耦合
 （导出校验 / framework 打包 / 运行时 dlopen）。
 
 ## 文件
 - `project.godot` — 驱动壳工程设置
-- `sts2.csproj` / `sts2.sln` — 空源码 + 预编译注入 target
+- `sts2.csproj` / `sts2.sln` — 空源码 + 预编译注入 target。`sts2.sln` 是 Godot 导出判断
+  "工程含 C#" 的存在性开关(只查存在不查内容)——缺失会**静默**跳过全部 C# 发布,
+  装到手机是空壳 app 且全程无报错,故 build-ios.sh 第 0 步会拦下
 - `export_presets.cfg` — iOS 导出预设（arm64、两个 GDExtension、pck 策略）
 - `build-ios.sh` — 一键：刷新织入 dll → 注入依赖 → Godot 导出 → 产出 .ipa/Xcode 工程
-- `Directory.Build.props` — 全局 TrimmerRoot 配置
+- `Directory.Build.props` 已废弃:其 TrimmerRoot 职责已内联进 `sts2.csproj`
 
 ## 库映射（已验证名字/入口符号匹配游戏要求）
 | 插件 | 游戏要求路径 | 我编出的产物 | 入口符号 |

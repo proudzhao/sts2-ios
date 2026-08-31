@@ -44,16 +44,36 @@ def main():
                 print(f"{s:>12} {p}{enc}")
         elif mode == "x":  # extract paths matching substring argv[3] into argv[4]
             pat, out = sys.argv[3], sys.argv[4]
+            out_real = os.path.realpath(out)
+            total = 0
+            MAX_TOTAL = 4 * 1024 * 1024 * 1024  # 4 GiB 总量上限:防恶意 pck 用虚假 size 撑爆磁盘
             for p, o, s, fl in entries:
-                if pat in p:
-                    if fl & 1:
-                        print(f"SKIP encrypted: {p}"); continue
-                    dst = os.path.join(out, p.replace("res://", "").replace("user://", "user/"))
-                    os.makedirs(os.path.dirname(dst), exist_ok=True)
-                    f.seek(o)
-                    with open(dst, "wb") as w:
-                        w.write(f.read(s))
-                    print(f"extracted {p} -> {dst}")
+                if pat not in p:
+                    continue
+                if fl & 1:
+                    print(f"SKIP encrypted: {p}"); continue
+                rel = p.replace("res://", "").replace("user://", "user/")
+                # 防路径穿越:pck 条目路径完全可控(恶意 pck 可覆盖任意用户文件)。
+                # 拒绝 空路径 / 绝对路径 / 盘符 / .. 段,并要求展开后仍在输出目录内。
+                segs = rel.replace("\\", "/").split("/")
+                if (not rel or rel.endswith("/") or rel.startswith("/") or ":" in segs[0]
+                        or ".." in segs):
+                    print(f"SKIP unsafe path: {p}"); continue
+                # realpath 同时消解相对路径与符号链接:前缀校验之外再防 symlink 指向目录外
+                dst = os.path.realpath(os.path.join(out, rel))
+                if not dst.startswith(out_real + os.sep):
+                    print(f"SKIP escapes output dir: {p}"); continue
+                if os.path.isdir(dst):
+                    print(f"SKIP path is a directory: {p}"); continue   # 防 open(dst,"wb") 抛 IsADirectoryError
+                total += s
+                if total > MAX_TOTAL:
+                    print("abort: total extracted size exceeds 4 GiB limit", file=sys.stderr)
+                    sys.exit(1)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                f.seek(o)
+                with open(dst, "wb") as w:
+                    w.write(f.read(s))
+                print(f"extracted {p} -> {dst}")
 
 if __name__ == "__main__":
     main()

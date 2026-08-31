@@ -37,6 +37,12 @@ step "0/6 前置检查"
 [ -x "$GODOT" ] || fail "Godot 引擎缺失: $GODOT（在 config.sh 里 STS2_GODOT_BIN 指向 Godot 4.5.1 mono 可执行）"
 command -v dotnet >/dev/null || fail "dotnet 不在 PATH（装 .NET 9 SDK）"
 [ -d "$GAME_DATA" ] || fail "游戏数据目录缺失（Steam 游戏没装或路径不对）: $GAME_DATA"
+# Godot 导出前只查 {assembly_name}.sln 是否存在（ProjectContainsDotNet 只认它）；
+# 缺失会静默跳过全部 C# 发布，装到手机是空壳 app 且全程无报错——必须先拦下。
+[ -f "$EXPORT_DIR/sts2.sln" ] || fail "缺少 ios-export/sts2.sln（Godot 靠它判断工程含 C#，缺失会静默产出无游戏代码的空壳 app）"
+# 值会被拼进 sed/plist/pbxproj，先做格式防呆（team id 为 10 位字母数字，bundle id 为点分标识符）
+[[ "$STS2_TEAM_ID" =~ ^[A-Za-z0-9]+$ ]] || fail "STS2_TEAM_ID 格式非法（应为字母数字，如 1234567890）"
+[[ "$STS2_BUNDLE_ID" =~ ^[A-Za-z0-9.-]+$ ]] || fail "STS2_BUNDLE_ID 含非法字符（仅允许字母数字、点、连字符）"
 TEMPLATES="$HOME/Library/Application Support/Godot/export_templates/4.5.1.stable.mono"
 [ -d "$TEMPLATES" ] || fail "iOS 导出模板未安装到 $TEMPLATES（Godot 里先 import templates.tpz）"
 [ -d "$STS2_IOS_LIBS_DIR/libspine_godot.ios.template_release.framework" ] || fail "Spine iOS 库缺失于 $STS2_IOS_LIBS_DIR（自备，见 README）"
@@ -98,10 +104,21 @@ ok "sts2.framework 预编译完成: $(du -h "$PUB_DIR/sts2.dylib" | cut -f1) arm
 
 step "5/6 Godot 导出 iOS 工程"
 mkdir -p "$EXPORT_DIR/build"
+# 导出前把 team id 钉进 preset：空 team id 会让 Godot 在写 pbxproj 之前就中止
+# （app_store_team_id 为空无条件报错），5.15 的 sed 修补发生在导出成功之后，太晚。
+# preset 里已有非空值则不动（尊重用户手填）。
+PRESET="$EXPORT_DIR/export_presets.cfg"
+if grep -q 'application/app_store_team_id=""' "$PRESET"; then
+  sed -i '' "s|application/app_store_team_id=\"\"|application/app_store_team_id=\"${STS2_TEAM_ID}\"|" "$PRESET" \
+    || fail "注入 team id 到 export_presets.cfg 失败"
+  ok "export_presets.cfg team id 已注入: $STS2_TEAM_ID"
+fi
 # 导出 Xcode 工程（--main-pack 是运行时参数不是导出参数,不能放这里;
 # 游戏内容通过 step 5.5 替换 pck 进入应用包）
 "$GODOT" --headless --path "$EXPORT_DIR" \
   --export-release "iOS" "$EXPORT_DIR/build/StS2.ipa" 2>&1 | tee "$WORK/export.log" | tail -8
+EXPRC=${PIPESTATUS[0]}
+[ "$EXPRC" = "0" ] || fail "Godot 导出退出码 $EXPRC，见 $WORK/export.log"
 [ -d "$EXPORT_DIR/build/StS2.xcodeproj" ] || fail "Godot 未生成 Xcode 工程，见 $WORK/export.log"
 ok "Xcode 工程已生成"
 

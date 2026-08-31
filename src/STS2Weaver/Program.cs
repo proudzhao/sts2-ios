@@ -10,7 +10,10 @@
 //                       (返回值方法: 返回 __result 局部变量,未绑定 __result 时返回 default)
 //   postfix           → 每个 return 点插入调用(经单出口改写)
 //   钩子参数绑定: __instance → this; __result / ref __result → 返回值局部变量;
-//                 其余按参数名匹配原方法参数(支持 ref)
+//                 其余按参数名匹配原方法参数(支持 ref);所有绑定做类型兼容检查
+//                 (值类型严格一致/引用类型按继承链/object 放行/ref 严格一致),
+//                 不匹配即报错拒绝出产物——游戏更新改了参数类型会响亮失败,
+//                 而不是织出运行时崩溃的 dll。
 // 不支持: transpiler / finalizer / __state / ___field 注入 / 泛型目标 / 重载目标 — 遇到即报错退出。
 
 using System.Text.Json;
@@ -206,15 +209,30 @@ void WeaveOne(PatchEntry p)
             if (name == "__instance")
             {
                 if (target.IsStatic) throw new InvalidOperationException("静态目标方法无 __instance");
+                // 类型检查:钩子声明的实例类型必须是目标类型的基类/接口(或 object)
+                if (!IsAssignableFrom(hp.ParameterType, target.DeclaringType))
+                    throw new InvalidOperationException(
+                        $"__instance 类型不兼容: 钩子声明 {hp.ParameterType.FullName}，目标类型 {target.DeclaringType.FullName}(须为其基类/接口或 object)");
                 loads.Add(il.Create(OpCodes.Ldarg_0));
             }
             else if (name == "__result")
             {
                 var v = EnsureResultVar();
-                if (hp.ParameterType.IsByReference) loads.Add(il.Create(OpCodes.Ldloca, v));
+                if (hp.ParameterType.IsByReference)
+                {
+                    var elem = ((ByReferenceType)hp.ParameterType).ElementType;
+                    // ref __result 会写回返回值,元素类型必须与返回类型完全一致
+                    if (!SameType(elem, target.ReturnType))
+                        throw new InvalidOperationException(
+                            $"ref __result 元素类型须与返回类型一致: 钩子 {elem.FullName} vs 目标 {target.ReturnType.FullName}");
+                    loads.Add(il.Create(OpCodes.Ldloca, v));
+                }
                 else
                 {
                     if (!inPostfixEpilogue) throw new InvalidOperationException("prefix 的 __result 必须是 ref");
+                    if (!IsAssignableFrom(hp.ParameterType, target.ReturnType))
+                        throw new InvalidOperationException(
+                            $"__result 类型不兼容: 钩子 {hp.ParameterType.FullName} vs 目标返回 {target.ReturnType.FullName}(须为后者的基类/接口或 object)");
                     loads.Add(il.Create(OpCodes.Ldloc, v));
                 }
             }
@@ -222,6 +240,29 @@ void WeaveOne(PatchEntry p)
             {
                 var op = target.Parameters.FirstOrDefault(x => x.Name == name)
                     ?? throw new InvalidOperationException($"钩子参数 '{name}' 在目标方法中找不到同名参数");
+                // 类型检查:按名绑定只匹配名字,游戏更新改了参数类型会产出运行时崩溃的 dll——这里拦下。
+                //   hook ref + 目标非 ref:合法(Harmony 写回语义,Ldarga 取参数槽地址),元素类型须一致
+                //   hook ref + 目标 ref:合法(Ldarg 推托管指针),元素类型须一致
+                //   hook 非 ref + 目标 ref:非法(会把托管指针喂给非 ref 形参),拒绝
+                //   普通参数:hook 类型须是目标类型的基类/接口(或 object)。值类型只认完全一致(不发 box)。
+                if (hp.ParameterType.IsByReference || op.ParameterType.IsByReference)
+                {
+                    if (op.ParameterType.IsByReference && !hp.ParameterType.IsByReference)
+                        throw new InvalidOperationException(
+                            $"钩子参数 '{name}' 不能以非 ref 形式绑定目标 ref 参数: 目标 {op.ParameterType.FullName}");
+                    var hookElem = hp.ParameterType.IsByReference
+                        ? ((ByReferenceType)hp.ParameterType).ElementType : hp.ParameterType;
+                    var tgtElem = op.ParameterType.IsByReference
+                        ? ((ByReferenceType)op.ParameterType).ElementType : op.ParameterType;
+                    if (!SameType(hookElem, tgtElem))
+                        throw new InvalidOperationException(
+                            $"钩子参数 '{name}' 的 ref 元素类型须与目标一致: 钩子 {hookElem.FullName} vs 目标 {tgtElem.FullName}");
+                }
+                else if (!IsAssignableFrom(hp.ParameterType, op.ParameterType))
+                {
+                    throw new InvalidOperationException(
+                        $"钩子参数 '{name}' 类型不兼容: 钩子 {hp.ParameterType.FullName} vs 目标 {op.ParameterType.FullName}(须为目标的基类/接口或 object)");
+                }
                 loads.Add(hp.ParameterType.IsByReference && !op.ParameterType.IsByReference
                     ? il.Create(OpCodes.Ldarga, op)
                     : il.Create(OpCodes.Ldarg, op));
@@ -284,6 +325,43 @@ static bool InRange(MethodBody body, Instruction ins, Instruction start, Instruc
     int i = body.Instructions.IndexOf(ins), s = body.Instructions.IndexOf(start);
     int e = end == null ? body.Instructions.Count : body.Instructions.IndexOf(end);
     return i >= s && i < e;
+}
+
+// ---- 钩子/目标类型兼容性(按名绑定不查类型的兜底防线) ----
+
+static bool IsObjectType(TypeReference t) => t.FullName == "System.Object";
+
+static TypeReference Element(TypeReference t) => t.IsByReference ? ((ByReferenceType)t).ElementType : t;
+
+// 两侧(去掉 byref 后)类型全名一致 — ref 绑定要求严格一致(写回语义)
+static bool SameType(TypeReference a, TypeReference b) => Element(a).FullName == Element(b).FullName;
+
+// 钩子形参类型能否承接目标侧的值(加载方向 target → hook):
+//   object 钩子形参恒放行(现有 manifest 用 object 收任意值,由钩子自己负责不碰;
+//   若目标实为值类型会织出需 box 的 IL——当前 manifest 无此组合,加 resolver 前不改此宽松)
+//   同类直通;类/接口按继承链判定;值类型只认完全一致(织入器不发 box)
+static bool IsAssignableFrom(TypeReference hookType, TypeReference targetType)
+{
+    hookType = Element(hookType);
+    targetType = Element(targetType);
+    if (hookType.FullName == targetType.FullName) return true;
+    if (IsObjectType(hookType)) return true;
+    if (hookType.FullName == "System.ValueType") return true;
+    TypeDefinition ht = null, tt = null;
+    try { ht = hookType.Resolve(); tt = targetType.Resolve(); }
+    catch (AssemblyResolutionException) { }   // Resolve 失败抛异常(非返回 null):放宽,运行时兜底
+    if (ht == null || tt == null) return true; // 解析不出(泛型/外部程序集)放宽,运行时兜底
+    try
+    {
+        if (tt.IsValueType) return false;      // 值类型目标:只认完全一致(不 box)
+        for (var t = tt; t != null; t = t.BaseType?.Resolve())
+            if (t.FullName == ht.FullName) return true;
+        for (var t = tt; t != null; t = t.BaseType?.Resolve())
+            foreach (var ifc in t.Interfaces)
+                if (ifc.InterfaceType.FullName == ht.FullName) return true;
+    }
+    catch (AssemblyResolutionException) { return true; }   // 链上类型解析不了:放宽
+    return false;
 }
 
 record Manifest(List<PatchEntry> Patches, List<StripEntry>? StripReadonly = null, List<ConstEntry>? PatchConsts = null, List<RedirectEntry>? RedirectCalls = null);

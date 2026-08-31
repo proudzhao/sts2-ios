@@ -99,6 +99,9 @@ Balatro 模式: 打包时直接把用户本机 Steam 拷贝的 pck + 程序集�
 - MemCheck 自检: os_proc_available_memory P/Invoke (libSystem.B.dylib; __Internal 不可用)
 
 ## Mac 桌面版补丁 (2026-07-13)
+> ⚠️ 本节为技术记录:提到的 `manifest.mac.json`、`tools/deploy-mac.sh`、`merge.csproj` 未随
+> 本仓库发布(Mac 桌面版补丁不属于 iOS 工具链范围)。如需 Mac 版功能,按本节思路自行实现。
+
 需求: 给用户 Steam 正版 Mac 版加 4 倍速 + 一键重开(不带手机专属的触摸/UI缩放/联机/6格快照)。
 - sts2.dll 与 iOS game-refs 同哈希(e424ace) → 补丁复用; manifest.mac.json 只挑 3 个钩子
   (TimeScale ReadyPostfix + HitStop prefix + QuickRestart.RestartOnlyPostfix 纯重开不带快照)

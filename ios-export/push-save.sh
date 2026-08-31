@@ -6,8 +6,8 @@
 #
 # 机制：复用游戏内 SyncImportPatch 的收件箱导入(和常规同步同一条已验证路径)——
 # 把电脑存档推到 Documents/sync_inbox/<版本>/1/**，下次【启动游戏】时 SyncImportPatch
-# 校验后原子导入到 default/1(手机没存档时 localNewest=0，任何推送都会被导入)。
-# 导入是原子目录交换，旧树留时间戳备份，不会出半成品。
+# 校验后导入到 default/1(手机没存档时 localNewest=0，任何推送都会被导入)。
+# 导入是崩溃安全的目录交换，旧树留时间戳备份，不会出半成品。
 #
 # 平台：本脚本用 xcrun devicectl，仅 macOS。Windows/Linux 用户见 docs/SAVE_SYNC.md 的跨平台做法。
 set -uo pipefail
@@ -22,10 +22,11 @@ source "$SCRIPT_DIR/config.sh"
 
 DEV="$STS2_DEVICE_UDID"
 BUNDLE="$STS2_BUNDLE_ID_SIGNED"
-DESK="$HOME/Library/Application Support/SlayTheSpire2/steam/$STS2_STEAM_ID"
-STAGE="$(mktemp -d /tmp/sts2push.XXXXXX)"
-trap 'rm -rf "$STAGE"' EXIT
 fail(){ echo "❌ $1"; exit 1; }
+DESK="$HOME/Library/Application Support/SlayTheSpire2/steam/$STS2_STEAM_ID"
+STAGE="$(mktemp -d /tmp/sts2push.XXXXXX)" || fail "创建暂存目录失败"
+ERRLOG="$(mktemp /tmp/sts2push.XXXXXX)" || fail "创建临时错误日志失败"  # 随机名(固定名 /tmp/pushsave.err 可被预埋符号链接截断任意文件)
+trap 'rm -rf "$STAGE" "$ERRLOG"' EXIT
 
 [ -d "$DESK" ] || fail "电脑存档目录不存在: $DESK（STS2_STEAM_ID 填对了吗？）"
 [ -f "$DESK/profile.save" ] || echo "⚠️ 注意: $DESK 里没看到 profile.save，确认这是你的存档目录再继续"
@@ -40,8 +41,8 @@ cp -a "$DESK" "$STAGE/inbox/$D/1" || fail "暂存电脑存档失败"
 echo "▶ 推送电脑存档(版本 $D) → 手机 $BUNDLE : Documents/sync_inbox/$D/1 …"
 xcrun devicectl device copy to --device "$DEV" \
   --domain-type appDataContainer --domain-identifier "$BUNDLE" \
-  --source "$STAGE/inbox" --destination "Documents/sync_inbox" 2>/tmp/pushsave.err \
-  || { cat /tmp/pushsave.err >&2; fail "推送失败(设备不可达/锁屏/bundle 错/App 没装？)"; }
+  --source "$STAGE/inbox" --destination "Documents/sync_inbox" 2>"$ERRLOG" \
+  || { cat "$ERRLOG" >&2; fail "推送失败(设备不可达/锁屏/bundle 错/App 没装？)"; }
 
 # 校验收件箱确实落地
 if xcrun devicectl device info files --device "$DEV" \

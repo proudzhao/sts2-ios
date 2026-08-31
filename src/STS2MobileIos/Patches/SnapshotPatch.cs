@@ -22,8 +22,9 @@ namespace STS2MobileIos.Patches;
 // progression and run history).
 //   Save Slot N: copy user://default into slot_<N>/ (temp dir + swap, overwriting any
 //                previous contents of that slot). Other slots are untouched.
-//   Load Slot N: copy slot_<N>/ back over user://default (temp dir + atomic Move so the
-//                live save is never left half-restored), then reload through
+//   Load Slot N: copy slot_<N>/ back over user://default (staged copy + crash-safe
+//                swap: the old tree moves aside first, so a kill mid-swap never leaves
+//                the live save missing — the next entry self-heals), then reload through
 //                QuickRestartPatch.ReloadCurrentRunAsync (the game's own
 //                quit-to-menu -> Continue path, already proven on device).
 //
@@ -40,6 +41,9 @@ public static class SnapshotPatch
     private const string SaveRootFolder = "default";     // game save tree under user://
     private const string SnapshotsFolder = "snapshots";  // our slots live under user://
     private const string SlotPrefix = "slot_";           // fixed dirs slot_1 / slot_2 / slot_3
+    // 串行化 Save/Load 的暂存+交换:若 TaskHelper 把 Load 派发到线程池,两个操作会互踩
+    // 共享的 .writing/.restoring/.old 路径,锁住整段磁盘序列即可
+    private static readonly object SwapLock = new();
 
     // Called from QuickRestartPatch.ReadyPostfix. `template` is the native
     // "Save and Quit" button, duplicated so layout/style/script match automatically.
@@ -110,24 +114,29 @@ public static class SnapshotPatch
     {
         try
         {
-            var source = SaveRootPath();
-            if (!Directory.Exists(source))
+            lock (SwapLock)
             {
-                PatchHelper.Log($"[Snapshot] save tree not found at {source}");
-                return;
+                var source = SaveRootPath();
+                // 上次读档交换若被系统杀,活存档可能停在"旧树已挪走"的中间态——先修复再读
+                HealSwapState(source, source + ".restoring");
+                if (!Directory.Exists(source))
+                {
+                    PatchHelper.Log($"[Snapshot] save tree not found at {source}");
+                    return;
+                }
+
+                Directory.CreateDirectory(SnapshotsRootPath());
+                var dest = SlotPath(slot);
+
+                // Staged copy + crash-safe swap, so a failure mid-copy never leaves a
+                // half-written slot that Load could pick up, and a kill mid-swap never
+                // loses the slot (old tree moves aside first; next entry self-heals).
+                // Only this slot's folder is replaced; the other two slots are untouched.
+                var tmp = dest + ".writing";
+                HealSwapState(dest, tmp);
+                StageCopy(source, tmp);
+                SwapInPlace(tmp, dest);
             }
-
-            Directory.CreateDirectory(SnapshotsRootPath());
-            var dest = SlotPath(slot);
-
-            // Copy into a temp dir first, then swap into place, so a failure mid-copy
-            // never leaves a half-written slot that Load could pick up. Only this slot's
-            // folder is replaced; the other two slots are untouched.
-            var tmp = dest + ".writing";
-            if (Directory.Exists(tmp)) Directory.Delete(tmp, true);
-            CopyDirectory(source, tmp);
-            if (Directory.Exists(dest)) Directory.Delete(dest, true);
-            Directory.Move(tmp, dest);
 
             // Record the run's current floor at save time so the button can show it
             // (e.g. "存档位1 [第12层]"). Kept in a sibling meta file — never inside the
@@ -157,22 +166,26 @@ public static class SnapshotPatch
         try
         {
             var src = SlotPath(slot);
-            if (!Directory.Exists(src) || !Directory.EnumerateFileSystemEntries(src).Any())
+            lock (SwapLock)
             {
-                // Empty slot: do nothing (the button label already shows [空]/[Empty]).
-                PatchHelper.Log($"[Snapshot] slot {slot} is empty, nothing to load");
-                return;
+                HealSwapState(src, src + ".writing");   // 上次存档交换被杀的残留:槽位先自愈
+                if (!Directory.Exists(src) || !Directory.EnumerateFileSystemEntries(src).Any())
+                {
+                    // Empty slot: do nothing (the button label already shows [空]/[Empty]).
+                    PatchHelper.Log($"[Snapshot] slot {slot} is empty, nothing to load");
+                    return;
+                }
+
+                var target = SaveRootPath();
+                HealSwapState(target, target + ".restoring");   // 活存档先自愈再动手
+
+                // Rebuild the live save tree from the slot via a staged copy + crash-safe
+                // swap: the old tree moves aside first, so a kill mid-swap never leaves the
+                // live save missing — next entry heals from the leftovers.
+                var tmp = target + ".restoring";
+                StageCopy(src, tmp);
+                SwapInPlace(tmp, target);
             }
-
-            var target = SaveRootPath();
-
-            // Rebuild the live save tree from the slot via a temp dir + swap, so the
-            // user's on-disk save is never left in a partially-restored state.
-            var tmp = target + ".restoring";
-            if (Directory.Exists(tmp)) Directory.Delete(tmp, true);
-            CopyDirectory(src, tmp);
-            if (Directory.Exists(target)) Directory.Delete(target, true);
-            Directory.Move(tmp, target);
 
             PatchHelper.Log($"[Snapshot] restored save tree from slot {slot}, reloading run");
 
@@ -203,8 +216,13 @@ public static class SnapshotPatch
                 var dir = SlotPath(n);
                 if (Directory.Exists(dir)) Directory.Delete(dir, true);
 
-                var writing = dir + ".writing";
-                if (Directory.Exists(writing)) Directory.Delete(writing, true);
+                foreach (var stale in new[] { dir + ".writing", dir + ".old" })
+                    if (Directory.Exists(stale)) Directory.Delete(stale, true);
+                var ready = dir + ".writing.ready";
+                if (File.Exists(ready)) File.Delete(ready);
+                if (Directory.Exists(SnapshotsRootPath()))
+                    foreach (var arch in Directory.GetDirectories(SnapshotsRootPath(), Path.GetFileName(dir) + ".old-*"))
+                        Directory.Delete(arch, true);
 
                 var meta = SlotMetaPath(n);
                 if (File.Exists(meta)) File.Delete(meta);
@@ -327,6 +345,80 @@ public static class SnapshotPatch
             File.Copy(file, Path.Combine(dest, Path.GetFileName(file)), overwrite: true);
         foreach (var dir in Directory.GetDirectories(source))
             CopyDirectory(dir, Path.Combine(dest, Path.GetFileName(dir)));
+    }
+
+    // ---- Crash-safe swap helpers ---------------------------------------------
+
+    // Copy `source` into a staged sibling directory and mark it complete with a
+    // sibling flag file. A kill mid-copy leaves the flag absent, so the heal step
+    // never promotes a half-written tree into place.
+    private static void StageCopy(string source, string staged)
+    {
+        if (Directory.Exists(staged)) Directory.Delete(staged, true);
+        var flag = staged + ".ready";
+        if (File.Exists(flag)) File.Delete(flag);
+        CopyDirectory(source, staged);
+        File.WriteAllText(flag, "");
+    }
+
+    // Replace `target` with the staged tree without any moment where `target` is
+    // missing-and-unrecoverable: the old tree moves aside to `<target>.old` first,
+    // then the staged copy moves in, then the old tree is deleted. The only crash
+    // window (between the two moves) leaves BOTH trees on disk, and HealSwapState
+    // repairs it on the next entry.
+    private static void SwapInPlace(string staged, string target)
+    {
+        var old = target + ".old";
+        if (Directory.Exists(old)) Directory.Delete(old, true);
+        if (Directory.Exists(target)) Directory.Move(target, old);
+        Directory.Move(staged, target);
+        var flag = staged + ".ready";
+        if (File.Exists(flag)) File.Delete(flag);
+        if (Directory.Exists(old)) Directory.Delete(old, true);
+    }
+
+    // Repair whatever state an interrupted swap left behind for `target`:
+    //   target present -> swap finished (or never started): drop stale staged leftovers;
+    //                     the old tree is archived, never deleted — on disk it is
+    //                     indistinguishable from real progress (a killed swap followed by
+    //                     the game rebuilding `default` looks identical), so keep it.
+    //   target missing -> promote staged (only if complete, flag present), else
+    //                     restore the old tree from `<target>.old`
+    private static void HealSwapState(string target, string staged)
+    {
+        var flag = staged + ".ready";
+        var old = target + ".old";
+        if (Directory.Exists(target))
+        {
+            if (Directory.Exists(staged)) Directory.Delete(staged, true);
+            if (File.Exists(flag)) File.Delete(flag);
+            if (Directory.Exists(old)) ArchiveOld(old);
+        }
+        else if (Directory.Exists(staged) && File.Exists(flag))
+        {
+            Directory.Move(staged, target);
+            File.Delete(flag);
+            if (Directory.Exists(old)) Directory.Delete(old, true);
+        }
+        else
+        {
+            if (Directory.Exists(staged)) Directory.Delete(staged, true);
+            if (File.Exists(flag)) File.Delete(flag);
+            if (Directory.Exists(old)) Directory.Move(old, target);
+        }
+    }
+
+    // 归档旧树(保留 3 份):理由见 HealSwapState——不能删,只能改名留底
+    private static void ArchiveOld(string old)
+    {
+        if (!Directory.Exists(old)) return;
+        var arch = old + "-" + DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        Directory.Move(old, arch);
+        var parent = Path.GetDirectoryName(old);
+        var prefix = Path.GetFileName(old) + "-";
+        var kept = Directory.GetDirectories(parent, prefix + "*").OrderByDescending(d => d).ToList();
+        foreach (var d in kept.Skip(3))
+            Directory.Delete(d, true);
     }
 
     // ---- Node names & localized labels -----------------------------------------

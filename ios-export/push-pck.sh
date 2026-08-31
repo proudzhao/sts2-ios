@@ -28,11 +28,15 @@ fail(){ echo "❌ $1"; exit 1; }
 echo "▶ 目标容器: $BUNDLE 的 Documents/  (设备 $DEV)"
 echo "▶ 推送素材包 $(du -h "$PCK" | cut -f1) → Documents/StS2.pck  (USB，1.77G 约数分钟，别拔线)…"
 
+# 错误日志用 mktemp 随机名（固定名 /tmp/pushpck.err 可被本机进程预埋符号链接截断任意文件）
+ERRLOG="$(mktemp "${TMPDIR:-/tmp}/pushpck.XXXXXX")" || fail "创建临时错误日志失败"
+trap 'rm -f "$ERRLOG"' EXIT
+
 # 用 devicectl 拷进 App 沙盒文档区。file→file，目标写全路径。
 if ! xcrun devicectl device copy to --device "$DEV" \
       --domain-type appDataContainer --domain-identifier "$BUNDLE" \
-      --source "$PCK" --destination "Documents/StS2.pck" 2>/tmp/pushpck.err; then
-  cat /tmp/pushpck.err >&2
+      --source "$PCK" --destination "Documents/StS2.pck" 2>"$ERRLOG"; then
+  cat "$ERRLOG" >&2
   echo "── 若上面报容器不存在: 手机上先用 SideStore(或 Xcode) 把瘦身 App 装上再来。"
   echo "── 若 devicectl 拷贝不通(设备/配对问题)，可改用 Finder: 连线 → 手机 → 文件 →"
   echo "   找到该 App → 把 StS2.pck 拖进它的文档区(文件名须为 StS2.pck)。"

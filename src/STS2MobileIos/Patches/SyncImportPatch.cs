@@ -11,8 +11,8 @@ namespace STS2MobileIos.Patches;
 // timestamp against the LOCAL save tree's newest mtime and import only if the inbox
 // really is newer — the newest-wins rule is enforced on-device too, so a stale push can
 // never clobber fresher phone progress. The replaced tree is kept as a timestamped
-// backup (last 2 retained). Import is an atomic directory swap (same discipline as
-// SnapshotPatch): no partial states.
+// backup (last 2 retained). Import is a crash-safe two-step swap (same discipline as
+// SnapshotPatch): interrupted imports self-heal on the next boot, no partial states.
 public static class SyncImportPatch
 {
     public static void TryImport()
@@ -33,6 +33,22 @@ public static class SyncImportPatch
 
             var best = pushes[0];
             string defaultDir = Path.Combine(root, "default");
+
+            // Heal an interrupted previous import: if default is missing (killed between
+            // "old tree aside" and "new tree in"), roll back the newest backup first so
+            // the newest-wins comparison below sees real local progress; then clear any
+            // orphan staged trees from a killed run.
+            if (!Directory.Exists(defaultDir))
+            {
+                // 跳过空目录备份(崩溃残留的空 default 壳),避免把空档当真实进度恢复
+                var backs = Directory.GetDirectories(root, "sync_replaced_*").OrderByDescending(d => d).ToList();
+                var restore = backs.FirstOrDefault(d => Directory.EnumerateFileSystemEntries(d).Any());
+                if (restore != null)
+                    Directory.Move(restore, defaultDir);
+            }
+            foreach (var d in Directory.GetDirectories(root, "sync_import_*"))
+                Directory.Delete(d, true);
+
             long localNewest = NewestMtimeUnix(Path.Combine(defaultDir, "1"));
 
             if (best.Ts <= localNewest)
@@ -43,12 +59,21 @@ public static class SyncImportPatch
                 return;
             }
 
-            // Import: swap default aside as a backup, move the pushed tree in.
+            // Import, crash-safe ordering:
+            //   1. stage the pushed tree out of the inbox (rename; inbox stays intact until the end)
+            //   2. move the current tree aside as a timestamped backup (old tree stays intact)
+            //   3. move the staged tree into place
+            //   4. only then drop the inbox
+            // A kill between 2 and 3 leaves default missing but backup + staged + inbox
+            // all on disk — the entry heal above restores the backup and this run
+            // re-decides newest-wins. A kill between 3 and 4 simply re-imports next boot.
+            string staged = Path.Combine(root, $"sync_import_{best.Ts}");
+            Directory.Move(Path.Combine(best.Dir, "1"), staged);
             string backup = Path.Combine(root, $"sync_replaced_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}");
             if (Directory.Exists(defaultDir))
                 Directory.Move(defaultDir, backup);
             Directory.CreateDirectory(defaultDir);
-            Directory.Move(Path.Combine(best.Dir, "1"), Path.Combine(defaultDir, "1"));
+            Directory.Move(staged, Path.Combine(defaultDir, "1"));
             Directory.Delete(inbox, true);
             PruneBackups(root, keep: 2);
             Log($"imported desktop save (push {best.Ts} > local {localNewest}); old tree kept at {Path.GetFileName(backup)}");

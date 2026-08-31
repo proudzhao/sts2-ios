@@ -39,6 +39,10 @@ xcrun devicectl list devices               # → STS2_DEVICE_UDID(连上 iPhone 
 
 `STS2_BUNDLE_ID` 让用户自定（建议其反向域名）。路径项一般默认即可，除非游戏/库不在默认位置。
 
+> `export_presets.cfg` 的 team id **不用手填**——build-ios.sh 第 5 步导出前会把 `STS2_TEAM_ID`
+> 自动注入(空 team id 会让 Godot 在写 Xcode 工程之前就中止)。bundle id 由脚本在导出后钉进工程。
+> `sts2.sln` 仓库已提供,不要删除(Godot 靠它的存在判断"工程含 C#",缺失会静默产出空壳 app)。
+
 ## 第 1 步 · 一键构建（命令行六步）
 
 ```bash
@@ -86,7 +90,7 @@ bash ios-export/push-pck.sh      # 把 build/StS2.pck 推到 App 的 Documents/S
 
 | 场景 | 做法 |
 |---|---|
-| 只改了补丁、游戏内容没动 | `bash ios-export/deploy-slim.sh`（换 dylib 重签，覆盖装，保留 pck+存档） |
+| 只改了补丁、游戏内容没动 | 先 `bash ios-export/build-ios.sh`（重新织入+AOT 产出新 dylib），再 `bash ios-export/deploy-slim.sh`（换 dylib 重签，覆盖装，保留 pck+存档）。**不能只跑 deploy-slim**——它只复制已有的 publish 产物，不会重新织入，会装旧 dylib |
 | 免插 Mac 永久续签 | SideStore + LocalDevVPN + iLoader 组合，手机后台自动重签（完整方法见 [`docs/RENEWAL.md`](docs/RENEWAL.md)） |
 | **首次把电脑进度迁到手机** | `bash ios-export/push-save.sh` 再启动游戏（手机没存档时也能导入；详见 [`docs/SAVE_SYNC.md`](docs/SAVE_SYNC.md)） |
 | 之后电脑↔手机自动同步 | `ios-export/sts2_save_sync.sh`（最新者胜；可挂 launchd 每 5 分钟） |
