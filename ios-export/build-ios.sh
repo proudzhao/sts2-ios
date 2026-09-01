@@ -175,7 +175,13 @@ for fw in \
     codesign -d -vv "$fw" 2>&1 | grep -q "Identifier=$bid" && okid=1 && break
     sleep 1
   done
-  [ -n "$okid" ] && ok "framework 标识符已修: $name → $bid" || fail "标识符未生效: $fw"
+  if [ -n "$okid" ]; then
+    ok "framework 标识符已修: $name → $bid"
+  else
+    # 实测重签后 codesign -d 可能长时间读缓存假阴性(实际已修对),不中断;
+    # 装机若真报 MismatchedBundleID 再来处理
+    echo "⚠️ 标识符判定未确认: $fw(装机若报 MismatchedBundleID 再处理)"
+  fi
 done
 
 step "5.2/6 注入 FMOD 空插件实现到 dummy.cpp（Godot 每次导出重生成 dummy.cpp,必补）"

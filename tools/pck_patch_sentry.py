@@ -79,9 +79,12 @@ def patch(src, dst):
     po = abs_off(proj[2]); psz = proj[3]
     f.seek(po); pdata = bytearray(f.read(psz))
     k = pdata.find(b"autoload/SentryInit")
-    assert k >= 0, "autoload/SentryInit key not found in project.binary"
+    if k < 0:
+        # v0.111.0+ 游戏改名为 SentryBootstrap0
+        k = pdata.find(b"autoload/SentryBootstrap0")
+    assert k >= 0, "autoload/Sentry* key not found in project.binary"
     pdata[k:k + 8] = b"xutoload"          # 'autoload' -> 'xutoload'
-    assert pdata.find(b"autoload/SentryInit") == -1
+    assert pdata.find(b"autoload/Sentry") == -1
     f.seek(po); f.write(pdata)
     proj[4] = hashlib.md5(bytes(pdata)).digest()
     print(f"project.binary: disabled autoload/SentryInit (same-length rename)")
