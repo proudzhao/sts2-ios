@@ -16,7 +16,7 @@ source "$SCRIPT_DIR/config.sh"
 DEV="$STS2_DEVICE_UDID"
 IDENT="$STS2_SIGN_IDENTITY"
 # 已构建的 .app（DerivedData 里的哈希目录不固定；Xcode Run 默认 Debug，也可能 Release，两者都收，取最新）
-APP=$(find "$HOME/Library/Developer/Xcode/DerivedData" -maxdepth 4 -type d -path "*-iphoneos/StS2.app" 2>/dev/null \
+APP=$(find "$HOME/Library/Developer/Xcode/DerivedData" -maxdepth 6 -type d -path "*-iphoneos/StS2.app" 2>/dev/null \
       | xargs -I{} stat -f '%m %N' {} 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
 PUB="$SCRIPT_DIR/.godot/mono/temp/bin/ExportRelease/ios-arm64/publish/sts2.dylib"
 STG="$(mktemp -d /tmp/sts2slim.XXXXXX)/StS2.app"
@@ -35,11 +35,18 @@ rm -f "$STG/StS2.pck"
 plutil -remove godot_cmdline "$STG/Info.plist" 2>/dev/null
 plutil -insert godot_cmdline -json '["--main-pack", "user://StS2.pck"]' "$STG/Info.plist" || fail "注入 cmdline 失败"
 echo "✅ 瘦身包 $(du -sh "$STG" | cut -f1), 已注入 --main-pack user://StS2.pck"
-# 3) 签名
+# 3) 签名。entitlements 用 Xcode 构建时生成的 .xcent(与 embedded profile 完全一致;
+#    config.sh 的 team id 可能只是账号显示名,写死会 0xe8008015;
+#    新版 macOS codesign -d --entitlements 输出文本/DER blob,不可直接复用)
+XCENT=$(find "$HOME/Library/Developer/Xcode/DerivedData" -maxdepth 8 \
+  -type f -path "*/StS2.build/*-iphoneos/StS2.build/StS2.app.xcent" 2>/dev/null \
+  | xargs -I{} stat -f '%m %N' {} 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+[ -n "$XCENT" ] && [ -f "$XCENT" ] && grep -q increased-memory "$XCENT" \
+  || fail "找不到 Xcode 生成的 entitlements(.xcent)或缺大内存权限"
 for fw in "$STG/Frameworks/"*.framework; do
   codesign -f -s "$IDENT" --generate-entitlement-der "$fw" >/dev/null 2>&1 || fail "签框架失败 $fw"
 done
-codesign -f -s "$IDENT" --generate-entitlement-der --entitlements "$ENT" "$STG" >/dev/null 2>&1 || fail "签 .app 失败"
+codesign -f -s "$IDENT" --generate-entitlement-der --entitlements "$XCENT" "$STG" >/dev/null 2>&1 || fail "签 .app 失败"
 codesign -d --entitlements - "$STG" 2>/dev/null | grep -q increased-memory && echo "✅ 大内存权限已嵌入" || fail "大内存权限缺失"
 codesign -vv "$STG" 2>&1 | grep -q "satisfies its Designated Requirement" && echo "✅ 签名有效"
 # 4) 装机(保留文档区)。⚠️ 必须查真实退出码, 曾有装机失败仍报成功的教训。

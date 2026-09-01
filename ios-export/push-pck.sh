@@ -43,12 +43,16 @@ if ! xcrun devicectl device copy to --device "$DEV" \
   fail "推送失败"
 fi
 
-# 校验: 文档区确实出现 StS2.pck（别只信退出码，实测过“装/拷成功仍没落地”的坑）
+# 校验: 文档区确实出现 StS2.pck（别只信退出码，实测过“装/拷成功仍没落地”的坑）。
+# 但 iOS 26 上 devicectl device info files 对 appDataContainer 常查不到(实测假阴性):
+# copy 输出里有 "File on Device ... Documents/StS2.pck + 大小" 即已落地。查到算确认,查不到降级为警告。
 if xcrun devicectl device info files --device "$DEV" \
      --domain-type appDataContainer --domain-identifier "$BUNDLE" 2>/dev/null \
      | grep -q "Documents/StS2.pck"; then
   echo "✅ 素材包已就位: $BUNDLE : Documents/StS2.pck"
-  echo "   现在启动 App 应能从 user://StS2.pck 加载游戏内容(引擎经 Info.plist godot_cmdline 读取)。"
 else
-  fail "推送命令返回成功，但文档区没查到 Documents/StS2.pck —— 未真正落地，重试或改用 Finder 拖入"
+  echo "⚠️ 容器查询没查到 StS2.pck(新版 iOS 该查询常为假阴性)。"
+  echo "   若上面 copy 输出有 'File on Device … Documents/StS2.pck' 且大小 ~1.77GB,一般已落地;"
+  echo "   最终以启动 App 是否有游戏内容为准。没有内容再用 Finder 拖入重试。"
 fi
+echo "   现在启动 App 应能从 user://StS2.pck 加载游戏内容(引擎经 Info.plist godot_cmdline 读取)。"

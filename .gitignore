@@ -44,3 +44,4 @@ ios-export/.work/
 *.log
 *.pid
 save_backups/
+.learnings/

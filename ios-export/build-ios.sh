@@ -156,6 +156,28 @@ sed -i '' "s/PRODUCT_BUNDLE_IDENTIFIER = [^;]*;/PRODUCT_BUNDLE_IDENTIFIER = ${ST
 grep -q "Apple Distribution" "$PBX" && fail "pbxproj 仍含 Apple Distribution"
 ok "pbxproj 签名+bundle 已修 (Development / $STS2_TEAM_ID / $STS2_BUNDLE_ID)"
 
+step "5.16/6 修 framework 签名标识符（iOS 26 installd 校验: 签名 id 必须 = plist bundle id = <app>.framework.<name>）"
+# Godot 导出的 framework plist 用 preset 占位 bundle id，而内嵌签名 id 是文件名，两者不一致
+# 装机被拒(MismatchedBundleIDSigningIdentifier)。统一重写 plist + 用签名身份强制重签。
+for fw in \
+  "$EXPORT_DIR/build/StS2/dylibs/ExportRelease/sts2_aot.xcframework/ios-arm64/sts2.framework" \
+  "$EXPORT_DIR/build/StS2/dylibs/addons/fmod/libs/ios/libGodotFmod.ios.template_release.xcframework/ios-arm64/libGodotFmod.ios.template_release.universal.framework" \
+  "$EXPORT_DIR/build/StS2/dylibs/addons/spine/ios/libspine_godot.ios.template_release.framework"; do
+  [ -d "$fw" ] || { echo "  跳过(不存在): $fw"; continue; }
+  name=$(basename "$fw" .framework | tr '_' '-')
+  bid="${STS2_BUNDLE_ID}.framework.${name}"
+  plutil -replace CFBundleIdentifier -string "$bid" "$fw/Info.plist" || fail "写 CFBundleIdentifier 失败: $fw"
+  codesign --force --sign "$STS2_SIGN_IDENTITY" --identifier "$bid" "$fw" >/dev/null 2>&1 \
+    || fail "重签失败: $fw"
+  # 重签后系统签名缓存可能有瞬时延迟,重试 3 次再判定
+  okid=""
+  for _i in 1 2 3; do
+    codesign -d -vv "$fw" 2>&1 | grep -q "Identifier=$bid" && okid=1 && break
+    sleep 1
+  done
+  [ -n "$okid" ] && ok "framework 标识符已修: $name → $bid" || fail "标识符未生效: $fw"
+done
+
 step "5.2/6 注入 FMOD 空插件实现到 dummy.cpp（Godot 每次导出重生成 dummy.cpp,必补）"
 # FMOD 静态库需 load_all_fmod_plugins 符号(正常由 Godot FMOD 编辑器插件生成,命令行导出没触发)。
 # 游戏无自定义 FMOD 插件,零插件空实现即可,否则 FMOD 初始化调空地址(0x0)崩。
