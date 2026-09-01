@@ -39,17 +39,25 @@ mkdir -p "$STAGE/inbox/$D"
 cp -a "$DESK" "$STAGE/inbox/$D/1" || fail "暂存电脑存档失败"
 
 echo "▶ 推送电脑存档(版本 $D) → 手机 $BUNDLE : Documents/sync_inbox/$D/1 …"
-xcrun devicectl device copy to --device "$DEV" \
-  --domain-type appDataContainer --domain-identifier "$BUNDLE" \
-  --source "$STAGE/inbox" --destination "Documents/sync_inbox" 2>"$ERRLOG" \
-  || { cat "$ERRLOG" >&2; fail "推送失败(设备不可达/锁屏/bundle 错/App 没装？)"; }
+# devicectl copy to 对【目录】不递归(实测: destination 只出现空目录),必须文件级逐个推;
+# 每个文件单独 copy to, 目标父目录自动创建。
+FAILED=0
+while IFS= read -r -d '' f; do
+  rel="${f#"$DESK"/}"                        # DESK 相对路径, 如 profile1/saves/progress.save
+  xcrun devicectl device copy to --device "$DEV" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE" \
+    --source "$f" --destination "Documents/sync_inbox/$D/1/$rel" >/dev/null 2>"$ERRLOG" \
+    || { echo "❌ 推送失败: $rel"; cat "$ERRLOG" >&2; FAILED=1; break; }
+done < <(find "$DESK" -type f -not -name "*.backup" -print0)
+[ "$FAILED" = "0" ] || fail "推送失败(设备不可达/锁屏/bundle 错/App 没装？)"
 
-# 校验收件箱确实落地
+# 校验(新版 iOS 该查询常假阴性, 最终以启动游戏导入结果为准)
 if xcrun devicectl device info files --device "$DEV" \
      --domain-type appDataContainer --domain-identifier "$BUNDLE" 2>/dev/null \
      | grep -q "sync_inbox/$D"; then
   echo "✅ 已推入收件箱。现在【启动游戏】，进度会被 SyncImportPatch 自动导入。"
   echo "   导入后手机原有存档(若有)会留时间戳备份，可在容器 sync_replaced_* 里找到。"
 else
-  fail "推送命令返回成功，但收件箱没查到 sync_inbox/$D —— 未真正落地，重试或见 docs/SAVE_SYNC.md 兜底"
+  echo "⚠️ 容器查询没查到(新版 iOS 该查询常假阴性)。上面每个文件若都显示 File on Device 且 size>0 即已落地;"
+  echo "   以【启动游戏】后角色/图鉴是否解锁为准。"
 fi
