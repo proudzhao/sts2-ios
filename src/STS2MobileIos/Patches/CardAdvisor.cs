@@ -197,13 +197,13 @@ public static class CardAdvisor
         new()
         {
             Key = "soul", NameEn = "Soul Cycle", NameZh = "灵魂",
-            CardSignals = new[] { "haunt", "soulstorm", "dirge", "capturespirit", "deathmarch", "gravewarden", "severance", "reave", "soul" },
+            CardSignals = new[] { "haunt", "soulstorm", "dirge", "capturespirit", "deathmarch", "gravewarden", "severance", "reave", "soul", "thescythe" },
             RelicSignals = new[] { "josspaper" },
         },
         new()
         {
             Key = "osty", NameEn = "Osty/Summon", NameZh = "召唤(Osty)",
-            CardSignals = new[] { "rattle", "fetch", "sicem", "pullaggro", "flatten", "boneshards", "unleash", "squeeze", "friendship", "legionofbone", "reanimate", "reaperform", "eidolon", "sentrymode", "bodyguard", "protector", "wisp", "righthandhand", "thescythe", "bone" },
+            CardSignals = new[] { "rattle", "fetch", "sicem", "pullaggro", "flatten", "boneshards", "unleash", "squeeze", "friendship", "legionofbone", "reanimate", "reaperform", "sentrymode", "bodyguard", "protector", "wisp", "righthandhand", "bone" },
             RelicSignals = new[] { "boneflute" },
             KeywordSignals = new[] { "minion" },
         },
@@ -215,7 +215,7 @@ public static class CardAdvisor
         new()
         {
             Key = "ethereal", NameEn = "Ethereal", NameZh = "虚无",
-            CardSignals = new[] { "pullfrombelow", "defile", "veilpiercer", "bansheescry", "spiritofash" },
+            CardSignals = new[] { "pullfrombelow", "defile", "veilpiercer", "bansheescry", "spiritofash", "eidolon" },
             KeywordSignals = new[] { "ethereal" },
         },
     };
