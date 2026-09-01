@@ -23,7 +23,7 @@ public static class CardKeyData
             "thesmith", "furnace", "foregoneconclusion", "refineblade", "wroughtinwar", "bulwark" },
 
         // ---- Necrobinder ----
-        ["soul"] = new[] { "dirge", "capturespirit", "soulstorm", "haunt", "severance", "gravewarden" },
+        ["soul"] = new[] { "dirge", "capturespirit", "soulstorm", "haunt", "severance", "gravewarden", "thescythe" },
         ["osty"] = new[] { "rattle", "fetch", "sicem", "boneshards", "necromastery",
             "reanimate", "legionofbone", "protector" },
         ["doom"] = new[] { "noescape", "deathsdoor", "timesup", "deathbringer", "scourge", "endofdays" },
