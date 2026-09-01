@@ -1,0 +1,15 @@
+[configuration]
+
+entry_symbol = "fmod_library_init"
+compatibility_minimum = 4.5
+
+[libraries]
+
+ios.release = "res://addons/fmod/libs/ios/libGodotFmod.ios.template_release.xcframework"
+
+[dependencies]
+
+ios.release = {
+"libs/ios/libfmod_iphoneos.a": "",
+"libs/ios/libfmodstudio_iphoneos.a": ""
+}

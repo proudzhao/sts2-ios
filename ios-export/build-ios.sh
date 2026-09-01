@@ -52,7 +52,7 @@ ok "前置齐全"
 
 step "1/6 重新织入最新 sts2.dll（补丁 + 游戏原始程序集）"
 cd "$ROOT" || fail "cd 失败"
-cp "$GAME_DATA/sts2.dll" "$WORK/sts2.dll" || fail "拷贝游戏 sts2.dll 失败"
+cp "$GAME_DATA"/*.dll "$WORK/" || fail "拷贝游戏 dll 失败"
 dotnet build src/STS2MobileIos -c Release -o "$WORK/mobilepatch-out" >"$WORK/patch-build.log" 2>&1 \
   || fail "补丁库编译失败，见 $WORK/patch-build.log"
 dotnet run --project src/STS2Weaver -c Release -- \
@@ -115,10 +115,34 @@ if grep -q 'application/app_store_team_id=""' "$PRESET"; then
 fi
 # 导出 Xcode 工程（--main-pack 是运行时参数不是导出参数,不能放这里;
 # 游戏内容通过 step 5.5 替换 pck 进入应用包）
-"$GODOT" --headless --path "$EXPORT_DIR" \
-  --export-release "iOS" "$EXPORT_DIR/build/StS2.ipa" 2>&1 | tee "$WORK/export.log" | tail -8
-EXPRC=${PIPESTATUS[0]}
-[ "$EXPRC" = "0" ] || fail "Godot 导出退出码 $EXPRC，见 $WORK/export.log"
+# 项目缺 res://icon.png 时 iOS 导出必报 Invalid icon；从正版游戏 icns 提取最大 PNG 块(ic10=1024²)生成，仅本地使用不入库
+ICON="$EXPORT_DIR/icon.png"
+if [ ! -f "$ICON" ]; then
+  python3 - "$GAME/icon.icns" "$ICON" <<'PYEOF'
+import struct, sys
+src, dst = sys.argv[1], sys.argv[2]
+data = open(src, 'rb').read()
+assert data[:4] == b'icns', 'not an icns file'
+best = None
+pos = 8
+while pos < len(data):
+    typ, size = data[pos:pos+4], struct.unpack('>I', data[pos+4:pos+8])[0]
+    if typ in (b'ic10', b'ic09', b'ic08') and (best is None
+            or (typ == b'ic10' and best[0] != b'ic10')   # ic10(1024²) 优先，其余按字节大小
+            or (typ != b'ic10' and best[0] != b'ic10' and size > best[1])):
+        best = (typ, size, data[pos+8:pos+size])
+    pos += size
+assert best, 'no PNG block found in icns'
+open(dst, 'wb').write(best[2])
+print(f'icon.png 已生成: {dst} ({best[0].decode()} {best[1]} bytes)')
+PYEOF
+  [ -f "$ICON" ] || fail "生成 icon.png 失败(游戏 icon.icns 无 PNG 块)"
+fi
+if ! "$GODOT" --headless --path "$EXPORT_DIR" \
+  --export-release "iOS" "$EXPORT_DIR/build/StS2.ipa" >"$WORK/export.log" 2>&1; then
+  tail -20 "$WORK/export.log" >&2
+  fail "Godot 导出失败，见 $WORK/export.log"
+fi
 [ -d "$EXPORT_DIR/build/StS2.xcodeproj" ] || fail "Godot 未生成 Xcode 工程，见 $WORK/export.log"
 ok "Xcode 工程已生成"
 

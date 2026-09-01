@@ -1,0 +1,8 @@
+[configuration]
+
+entry_symbol = "spine_godot_library_init"
+compatibility_minimum = "4.1"
+
+[libraries]
+
+ios.release = "ios/libspine_godot.ios.template_release.framework"

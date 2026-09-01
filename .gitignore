@@ -13,7 +13,15 @@ fmod-libs/
 fmod-gdextension/
 ios-libs/
 spine-runtimes/
-ios-export/addons/
+ios-export/icon.png
+ios-export/icon.png.import
+ios-export/addons/*
+!ios-export/addons/spine/
+!ios-export/addons/fmod/
+ios-export/addons/spine/*
+ios-export/addons/fmod/*
+!ios-export/addons/spine/spine_godot_extension.gdextension
+!ios-export/addons/fmod/fmod.gdextension
 ios-export/prebuilt/
 
 # --- 构建产物 / 缓存 ---
