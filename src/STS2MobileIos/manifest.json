@@ -216,48 +216,6 @@
       "kind": "postfix",
       "hookType": "STS2MobileIos.Patches.SnapshotPatch",
       "hookMethod": "OnNewRun"
-    },
-    {
-      "targetType": "MegaCrit.Sts2.Core.Nodes.Screens.CardSelection.NCardRewardSelectionScreen",
-      "targetMethod": "RefreshOptions",
-      "kind": "postfix",
-      "hookType": "STS2MobileIos.Patches.CardAdvisorPatch",
-      "hookMethod": "RefreshOptionsPostfix"
-    },
-    {
-      "targetType": "MegaCrit.Sts2.Core.Nodes.Screens.Shops.NMerchantInventory",
-      "targetMethod": "Initialize",
-      "kind": "postfix",
-      "hookType": "STS2MobileIos.Patches.CardAdvisorPatch",
-      "hookMethod": "MerchantInitPostfix"
-    },
-    {
-      "targetType": "MegaCrit.Sts2.Core.Nodes.Screens.CardSelection.NChooseACardSelectionScreen",
-      "targetMethod": "_Ready",
-      "kind": "postfix",
-      "hookType": "STS2MobileIos.Patches.CardAdvisorPatch",
-      "hookMethod": "ChooseACardPostfix"
-    },
-    {
-      "targetType": "MegaCrit.Sts2.Core.Nodes.Screens.CardSelection.NChooseABundleSelectionScreen",
-      "targetMethod": "_Ready",
-      "kind": "postfix",
-      "hookType": "STS2MobileIos.Patches.CardAdvisorPatch",
-      "hookMethod": "ChooseABundlePostfix"
-    },
-    {
-      "targetType": "MegaCrit.Sts2.Core.Nodes.Screens.CardSelection.NCardGridSelectionScreen",
-      "targetMethod": "_Ready",
-      "kind": "postfix",
-      "hookType": "STS2MobileIos.Patches.CardAdvisorPatch",
-      "hookMethod": "GridSelectPostfix"
-    },
-    {
-      "targetType": "MegaCrit.Sts2.Core.Nodes.Screens.Overlays.NOverlayStack",
-      "targetMethod": "Push",
-      "kind": "postfix",
-      "hookType": "STS2MobileIos.Patches.CardAdvisorPatch",
-      "hookMethod": "OverlayPushPostfix"
     }
   ]
 }

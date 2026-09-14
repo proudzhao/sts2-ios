@@ -38,7 +38,6 @@ iOS 禁止 JIT，Harmony 之类运行时打补丁的方案不可用。本项目�
 | **四倍速** | 全局 4x（游戏官方钳制上限就是 4.0，安全），含"Boss 二阶段转场后倍速失效"的修复 | [`TimeScalePatch.cs`](src/STS2MobileIos/Patches/TimeScalePatch.cs) |
 | **一键重开** | 暂停菜单加"Restart Room"，一键回到进房时的存档点 | [`QuickRestartPatch.cs`](src/STS2MobileIos/Patches/QuickRestartPatch.cs) |
 | **时光回溯 / 快照** | 暂停菜单 3 个存档位 + 3 个读档位，随时存读（自由 SL） | [`SnapshotPatch.cs`](src/STS2MobileIos/Patches/SnapshotPatch.cs) |
-| **选牌 AI 助手** | 奖励/事件/商店/升级界面按流派给候选卡评级+理由（只加标签，不改概率/数值） | [`CardAdvisorPatch.cs`](src/STS2MobileIos/Patches/CardAdvisorPatch.cs) |
 | **双端存档同步** | 电脑↔手机"最新者胜"自动同步，手机侧二次裁决防旧覆新 | [`sts2_save_sync.sh`](ios-export/sts2_save_sync.sh) + [`SyncImportPatch.cs`](src/STS2MobileIos/Patches/SyncImportPatch.cs) |
 
 底层移植/稳定性补丁（触控、UI 缩放、移动布局、内存、着色器预热、生命周期等）见 [`docs/patch-catalog.md`](docs/patch-catalog.md)。
@@ -49,7 +48,7 @@ iOS 禁止 JIT，Harmony 之类运行时打补丁的方案不可用。本项目�
 AGENTS.md              给 AI Agent 的一站式移植 runbook（从这里开始）
 src/STS2Weaver/        Mono.Cecil 静态织入器（纯原创工具）
 src/STS2MobileIos/     iOS 移植补丁工程
-  ├─ Patches/          触控/布局/UI缩放/着色器/快照/生命周期/选牌助手 等补丁
+  ├─ Patches/          触控/布局/UI缩放/着色器/快照/生命周期 等补丁
   ├─ manifest.json     织入清单（目标游戏类 → 补丁钩子的映射）
   └─ PatchHelper.cs    反射/日志辅助
 ios-export/            iOS 构建工程（build-ios.sh 六步链、NativeAOT 导出契约）
