@@ -109,6 +109,7 @@ bash ios-export/push-pck.sh      # 把 build/StS2.pck 推到 App 的 Documents/S
 
 - **四倍速**（`TimeScalePatch.cs`，官方 4x 上限，含 Boss 转场倍速失效修复）
 - **一键重开**（`QuickRestartPatch.cs`，暂停菜单 Restart Room）
+- **控制台**（`DevConsolePatch.cs`，暂停菜单调金币/生命，走游戏自带属性 setter+事件）
 - **双端存档同步**（`sts2_save_sync.sh` + `SyncImportPatch.cs`，最新者胜）
 
 完整表见 [README](README.md#移植带的增强功能)；底层稳定性补丁见 [`docs/patch-catalog.md`](docs/patch-catalog.md)。

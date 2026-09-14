@@ -37,6 +37,7 @@ iOS 禁止 JIT，Harmony 之类运行时打补丁的方案不可用。本项目�
 |---|---|---|
 | **四倍速** | 全局 4x（游戏官方钳制上限就是 4.0，安全），含"Boss 二阶段转场后倍速失效"的修复 | [`TimeScalePatch.cs`](src/STS2MobileIos/Patches/TimeScalePatch.cs) |
 | **一键重开** | 暂停菜单加"Restart Room"，一键回到进房时的存档点 | [`QuickRestartPatch.cs`](src/STS2MobileIos/Patches/QuickRestartPatch.cs) |
+| **控制台** | 暂停菜单调金币（0-9999）与生命（1-最大生命），走游戏自带属性 setter+事件，UI 即时刷新 | [`DevConsolePatch.cs`](src/STS2MobileIos/Patches/DevConsolePatch.cs) |
 | **双端存档同步** | 电脑↔手机"最新者胜"自动同步，手机侧二次裁决防旧覆新 | [`sts2_save_sync.sh`](ios-export/sts2_save_sync.sh) + [`SyncImportPatch.cs`](src/STS2MobileIos/Patches/SyncImportPatch.cs) |
 
 底层移植/稳定性补丁（触控、UI 缩放、移动布局、内存、着色器预热、生命周期等）见 [`docs/patch-catalog.md`](docs/patch-catalog.md)。

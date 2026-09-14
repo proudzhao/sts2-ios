@@ -197,6 +197,13 @@
       "hookMethod": "ReadyPostfix"
     },
     {
+      "targetType": "MegaCrit.Sts2.Core.Nodes.Screens.PauseMenu.NPauseMenu",
+      "targetMethod": "_Ready",
+      "kind": "postfix",
+      "hookType": "STS2MobileIos.Patches.DevConsolePatch",
+      "hookMethod": "ReadyPostfix"
+    },
+    {
       "targetType": "MegaCrit.Sts2.Core.Nodes.NGame",
       "targetMethod": "_Ready",
       "kind": "postfix",
