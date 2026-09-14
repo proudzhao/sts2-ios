@@ -209,13 +209,6 @@
       "kind": "prefix",
       "hookType": "STS2MobileIos.Patches.TimeScalePatch",
       "hookMethod": "HitStopSetTimeScalePrefix"
-    },
-    {
-      "targetType": "MegaCrit.Sts2.Core.Runs.RunManager",
-      "targetMethod": "SetUpNewSingleplayer",
-      "kind": "postfix",
-      "hookType": "STS2MobileIos.Patches.SnapshotPatch",
-      "hookMethod": "OnNewRun"
     }
   ]
 }

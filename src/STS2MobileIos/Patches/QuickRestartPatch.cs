@@ -32,34 +32,20 @@ public static class QuickRestartPatch
     private const string ButtonName = "RestartRoom";
 
     // postfix on MegaCrit.Sts2.Core.Nodes.Screens.PauseMenu.NPauseMenu._Ready (iOS/移动版).
-    // 加"一键重开"按钮 + 6 格存档位快照(时光回溯)。
+    // 加"一键重开"按钮。
     public static void ReadyPostfix(object __instance)
     {
-        var saveBtn = AddRestartButton(__instance);
-        if (saveBtn == null)
-            return;
-        try
-        {
-            var container = (Control)PatchHelper.Field(((Node)__instance).GetType(), "_buttonContainer")
-                ?.GetValue(__instance);
-            // Snapshot / rollback ("time-travel SL"): adds six buttons right below
-            // Restart Room — Save Slot 1/2/3 and Load Slot 1/2/3.
-            SnapshotPatch.AddButtons(container, saveBtn);
-        }
-        catch (Exception ex)
-        {
-            PatchHelper.Log($"[QuickRestart] Snapshot buttons failed: {ex}");
-        }
+        AddRestartButton(__instance);
     }
 
-    // postfix on NPauseMenu._Ready (桌面精简版): 只加"一键重开", 不带快照(菜单更干净)。
+    // postfix on NPauseMenu._Ready (桌面精简版): 只加"一键重开"。
     public static void RestartOnlyPostfix(object __instance)
     {
         AddRestartButton(__instance);
     }
 
     // 复制原生"保存并退出"按钮(样式/脚本自动一致), 改名改文案, 接一键重开。
-    // 返回原 saveBtn(供快照版复用), 失败/已存在返回 null。
+    // 返回原 saveBtn(供 DevConsole 等后续按钮复制复用), 失败/已存在返回 null。
     private static Node AddRestartButton(object __instance)
     {
         try
