@@ -34,7 +34,7 @@ ok(){ echo "✅ $1"; }
 step(){ echo; echo "▶ $1"; }
 
 step "0/6 前置检查"
-[ -x "$GODOT" ] || fail "Godot 引擎缺失: $GODOT（在 config.sh 里 STS2_GODOT_BIN 指向 Godot 4.5.1 mono 可执行）"
+[ -x "$GODOT" ] || fail "Godot 引擎缺失: ${GODOT}（在 config.sh 里 STS2_GODOT_BIN 指向 Godot 4.5.1 mono 可执行）"
 command -v dotnet >/dev/null || fail "dotnet 不在 PATH（装 .NET 9 SDK）"
 [ -d "$GAME_DATA" ] || fail "游戏数据目录缺失（Steam 游戏没装或路径不对）: $GAME_DATA"
 # Godot 导出前只查 {assembly_name}.sln 是否存在（ProjectContainsDotNet 只认它）；
@@ -44,10 +44,10 @@ command -v dotnet >/dev/null || fail "dotnet 不在 PATH（装 .NET 9 SDK）"
 [[ "$STS2_TEAM_ID" =~ ^[A-Za-z0-9]+$ ]] || fail "STS2_TEAM_ID 格式非法（应为字母数字，如 1234567890）"
 [[ "$STS2_BUNDLE_ID" =~ ^[A-Za-z0-9.-]+$ ]] || fail "STS2_BUNDLE_ID 含非法字符（仅允许字母数字、点、连字符）"
 TEMPLATES="$HOME/Library/Application Support/Godot/export_templates/4.5.1.stable.mono"
-[ -d "$TEMPLATES" ] || fail "iOS 导出模板未安装到 $TEMPLATES（Godot 里先 import templates.tpz）"
-[ -d "$STS2_IOS_LIBS_DIR/libspine_godot.ios.template_release.framework" ] || fail "Spine iOS 库缺失于 $STS2_IOS_LIBS_DIR（自备，见 README）"
-[ -d "$STS2_IOS_LIBS_DIR/libGodotFmod.ios.template_release.xcframework" ] || fail "FMOD iOS 库缺失于 $STS2_IOS_LIBS_DIR（自备）"
-[ -f "$STS2_FMOD_STATIC_DIR/libfmod_iphoneos.a" ] || fail "FMOD 静态库缺失于 $STS2_FMOD_STATIC_DIR（自备）"
+[ -d "$TEMPLATES" ] || fail "iOS 导出模板未安装到 ${TEMPLATES}（Godot 里先 import templates.tpz）"
+[ -d "$STS2_IOS_LIBS_DIR/libspine_godot.ios.template_release.framework" ] || fail "Spine iOS 库缺失于 ${STS2_IOS_LIBS_DIR}（自备，见 README）"
+[ -d "$STS2_IOS_LIBS_DIR/libGodotFmod.ios.template_release.xcframework" ] || fail "FMOD iOS 库缺失于 ${STS2_IOS_LIBS_DIR}（自备）"
+[ -f "$STS2_FMOD_STATIC_DIR/libfmod_iphoneos.a" ] || fail "FMOD 静态库缺失于 ${STS2_FMOD_STATIC_DIR}（自备）"
 ok "前置齐全"
 
 step "1/6 重新织入最新 sts2.dll（补丁 + 游戏原始程序集）"
@@ -61,10 +61,32 @@ dotnet run --project src/STS2Weaver -c Release -- \
 grep -q "完成" "$WORK/weave.log" || fail "织入失败，见 $WORK/weave.log"
 ok "织入完成: $WOVEN"
 
+# 可选: 织入 Watcher mod(观者角色 mod)。静态化流程:
+#   1) 反编译重编译的 STS2WatcherMod.dll --gen 把 [HarmonyPatch] 转成织入清单(钩子翻 public,写回 dll)
+#   2) 二段织入: 在上一步产物上再织入 mod 的 prefix/postfix/finalizer(含 ModManager.Initialize 引导钩子)
+# 关闭: config.sh 里 STS2_ENABLE_WATCHER_MOD=0
+: "${STS2_ENABLE_WATCHER_MOD:=1}"
+if [ "$STS2_ENABLE_WATCHER_MOD" = "1" ]; then
+  step "1b/6 织入 Watcher mod（Harmony 补丁静态化）"
+  dotnet build src/STS2WatcherMod -c Release -o "$WORK/watcher-out" >"$WORK/watcher-build.log" 2>&1 \
+    || fail "Watcher mod 编译失败，见 $WORK/watcher-build.log"
+  STS2_GAME_DATA_DIR="$GAME_DATA" dotnet run --project src/STS2Weaver -c Release -- \
+    --gen "$WORK/watcher-out/STS2WatcherMod.dll" "$WORK/sts2.dll" "$WORK/watcher-manifest.json" \
+    2>&1 | tee "$WORK/watcher-gen.log" | grep -E "完成|WARN|跳过"
+  grep -q "完成" "$WORK/watcher-gen.log" || fail "Watcher 织入清单生成失败，见 $WORK/watcher-gen.log"
+  dotnet run --project src/STS2Weaver -c Release -- \
+    "$WOVEN" "$WORK/watcher-out/STS2WatcherMod.dll" "$WORK/watcher-manifest.json" "$WORK/sts2-woven-watcher.dll" \
+    2>&1 | tee "$WORK/watcher-weave.log" | grep -E "\[FAIL\]|完成"
+  grep -q "完成" "$WORK/watcher-weave.log" || fail "Watcher 织入失败，见 $WORK/watcher-weave.log"
+  WOVEN="$WORK/sts2-woven-watcher.dll"
+  ok "Watcher 织入完成: ${WOVEN}（pck 用 push-mod.sh 推上手机）"
+fi
+
 step "2/6 组装 prebuilt/（织入主程序集 + 全部托管依赖）"
 rm -rf "$PREBUILT"; mkdir -p "$PREBUILT/deps"
 cp "$WOVEN" "$PREBUILT/sts2.dll" || fail "拷贝织入 dll 失败"
 cp "$WORK/mobilepatch-out/STS2MobileIos.dll" "$PREBUILT/deps/" || fail "拷贝补丁 dll 失败"
+[ -f "$WORK/watcher-out/STS2WatcherMod.dll" ] && cp "$WORK/watcher-out/STS2WatcherMod.dll" "$PREBUILT/deps/"
 # 只拷第三方托管依赖。判定基准 = 框架实际安装的运行时库目录（权威清单，非名字猜测）：
 #   凡在 shared/Microsoft.NETCore.App 里的 = 框架自带（NativeAOT runtime pack 提供）→ 排除
 #   否则 = 第三方库 → 保留（含 System.IO.Hashing 这类名字像框架但其实是 NuGet 包的）
@@ -97,7 +119,7 @@ dotnet publish sts2.csproj -c ExportRelease -r ios-arm64 \
 # 用真实退出码 + 产物存在判成败（publish.log 里有海量 IL 裁剪 warning，文本含 "error" 子串，不能靠 grep）
 PUBRC=${PIPESTATUS[0]}
 PUB_DIR="$EXPORT_DIR/.godot/mono/temp/bin/ExportRelease/ios-arm64/publish"
-[ "$PUBRC" = "0" ] || fail "dotnet publish 退出码 $PUBRC，见 $WORK/publish.log"
+[ "$PUBRC" = "0" ] || fail "dotnet publish 退出码 ${PUBRC}，见 $WORK/publish.log"
 [ -f "$PUB_DIR/sts2.dylib" ] || fail "NativeAOT 未产出 sts2.dylib，见 $WORK/publish.log"
 file "$PUB_DIR/sts2.dylib" | grep -q "arm64" || fail "sts2.dylib 不是 arm64"
 ok "sts2.framework 预编译完成: $(du -h "$PUB_DIR/sts2.dylib" | cut -f1) arm64 原生库"

@@ -33,9 +33,11 @@
     </Reference>
   </ItemGroup>
 
-  <!-- 补丁库需 root(被织入调用点引用+含反射逻辑); sts2 由 Godot targets root -->
+  <!-- 补丁库需 root(被织入调用点引用+含反射逻辑); sts2 由 Godot targets root。
+       STS2WatcherMod 同理: 整库 root, mod 内部对游戏类型的反射(FieldInfo 等)全部可用。 -->
   <ItemGroup>
     <TrimmerRootAssembly Include="STS2MobileIos" />
+    <TrimmerRootAssembly Include="STS2WatcherMod" Condition="Exists('$(PrebuiltDir)/deps/STS2WatcherMod.dll')" />
   </ItemGroup>
 
   <!--
