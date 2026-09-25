@@ -39,6 +39,7 @@ iOS 禁止 JIT，Harmony 之类运行时打补丁的方案不可用。本项目�
 | **一键重开** | 暂停菜单加"Restart Room"，一键回到进房时的存档点 | [`QuickRestartPatch.cs`](src/STS2MobileIos/Patches/QuickRestartPatch.cs) |
 | **控制台** | 暂停菜单调金币（0-9999）与生命（1-最大生命），走游戏自带属性 setter+事件，UI 即时刷新 | [`DevConsolePatch.cs`](src/STS2MobileIos/Patches/DevConsolePatch.cs) |
 | **双端存档同步** | 电脑↔手机"最新者胜"自动同步，手机侧二次裁决防旧覆新 | [`sts2_save_sync.sh`](ios-export/sts2_save_sync.sh) + [`SyncImportPatch.cs`](src/STS2MobileIos/Patches/SyncImportPatch.cs) |
+| **Mod 静态织入（观者）** | 把 Workshop 订阅的 Watcher mod（观者角色）构建期静态织入——Harmony 补丁静态化、76 个补丁类转织入清单、pck 推上手机挂载。默认开启，`STS2_ENABLE_WATCHER_MOD=0` 关闭 | [`docs/mod-porting.md`](docs/mod-porting.md) + [`push-mod.sh`](ios-export/push-mod.sh) |
 
 底层移植/稳定性补丁（触控、UI 缩放、移动布局、内存、着色器预热、生命周期等）见 [`docs/patch-catalog.md`](docs/patch-catalog.md)。
 
@@ -46,14 +47,15 @@ iOS 禁止 JIT，Harmony 之类运行时打补丁的方案不可用。本项目�
 
 ```
 AGENTS.md              给 AI Agent 的一站式移植 runbook（从这里开始）
-src/STS2Weaver/        Mono.Cecil 静态织入器（纯原创工具）
+src/STS2Weaver/        Mono.Cecil 静态织入器（纯原创工具，含 --gen Harmony 补丁静态化）
 src/STS2MobileIos/     iOS 移植补丁工程
   ├─ Patches/          触控/布局/UI缩放/着色器/生命周期 等补丁
   ├─ manifest.json     织入清单（目标游戏类 → 补丁钩子的映射）
   └─ PatchHelper.cs    反射/日志辅助
+src/STS2WatcherMod/    Watcher mod（观者）反编译重编译工程 —— 构建期静态织入, 见 docs/mod-porting.md
 ios-export/            iOS 构建工程（build-ios.sh 六步链、NativeAOT 导出契约）
   ├─ config.example.sh 本地配置模板（复制成 config.sh 填你自己的签名身份）
-  └─ build/push-pck/deploy/push-save/sync 构建 / 素材包上机 / 增量装机 / 存档迁移 / 双端同步脚本
+  └─ build/push-pck/push-mod/deploy/push-save/sync 构建 / 素材包上机 / mod 素材上机 / 增量装机 / 存档迁移 / 双端同步脚本
 tools/                 pck 处理脚本（操作你自己的合法游戏文件）
 docs/                  移植技术文档（部署架构、.NET AOT 导出契约、补丁目录）
 share/                 移植技术记录（PDF / HTML）

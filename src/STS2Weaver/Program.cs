@@ -21,6 +21,16 @@ using Mono.Cecil;
 using Mono.Cecil.Cil;
 using Mono.Cecil.Rocks;
 
+// --gen 模式: 从 mod 程序集提取 [HarmonyPatch] 生成织入清单(不织入)
+// 用法: STS2Weaver --gen <mod.dll> <game-sts2.dll> <out-manifest.json>
+//   - 扫描 mod 里所有 [HarmonyPatch] 类,解析目标(含 MethodType/argumentTypes/TargetMethods 运行时反射目标)
+//   - 把钩子方法(Prefix/Postfix/Finalizer)与其声明类型翻成 public(跨程序集 call 需要)
+//   - 写回 mod.dll + 输出 manifest(含 ModManager.Initialize → WatcherBootstrap.ModManagerInitializePostfix 引导条目)
+if (args.Length == 4 && args[0] == "--gen")
+{
+    return GenHarmonyManifest(args[1], args[2], args[3]);
+}
+
 if (args.Length != 4)
 {
     Console.Error.WriteLine("usage: STS2Weaver <sts2.dll> <hooks.dll> <manifest.json> <output.dll>");
@@ -177,7 +187,8 @@ void WeaveOne(PatchEntry p)
 
     bool isPrefix = p.Kind.Equals("prefix", StringComparison.OrdinalIgnoreCase);
     bool isPostfix = p.Kind.Equals("postfix", StringComparison.OrdinalIgnoreCase);
-    if (!isPrefix && !isPostfix) throw new InvalidOperationException($"未知 kind: {p.Kind}");
+    bool isFinalizer = p.Kind.Equals("finalizer", StringComparison.OrdinalIgnoreCase);
+    if (!isPrefix && !isPostfix && !isFinalizer) throw new InvalidOperationException($"未知 kind: {p.Kind}");
 
     var hookReturnsBool = hook.ReturnType.MetadataType == MetadataType.Boolean;
     var hookReturnsVoid = hook.ReturnType.MetadataType == MetadataType.Void;
@@ -185,6 +196,10 @@ void WeaveOne(PatchEntry p)
         throw new InvalidOperationException("prefix 钩子必须返回 bool 或 void");
     if (isPostfix && !hookReturnsVoid)
         throw new InvalidOperationException("postfix 钩子必须返回 void");
+    if (isFinalizer && !hookReturnsVoid && hook.ReturnType.FullName != "System.Exception")
+        throw new InvalidOperationException("finalizer 钩子必须返回 void 或 Exception");
+
+    if (isFinalizer) { WeaveFinalizer(p, target, hook); return; }
 
     var body = target.Body;
     body.InitLocals = true;
@@ -202,9 +217,15 @@ void WeaveOne(PatchEntry p)
     }
 
     // 生成钩子实参加载指令
+    // ref __result 桥接: 钩子声明基类型(如 Texture2D)而目标返回派生类型(CompressedTexture2D)
+    // — 游戏更新改了返回类型但 mod 没跟上; Harmony 在 PC 容忍此绑定。桥接局部变量 + castclass 复制回写,
+    // 钩子写入非派生实例时 castclass 抛 InvalidCastException(与 Harmony 未检查行为同等级)。
+    List<Instruction> resultCopyBacks = new();
+
     List<Instruction> BuildArgLoads(bool inPostfixEpilogue)
     {
         var loads = new List<Instruction>();
+        resultCopyBacks.Clear();
         foreach (var hp in hook.Parameters)
         {
             var name = hp.Name;
@@ -223,11 +244,24 @@ void WeaveOne(PatchEntry p)
                 if (hp.ParameterType.IsByReference)
                 {
                     var elem = ((ByReferenceType)hp.ParameterType).ElementType;
-                    // ref __result 会写回返回值,元素类型必须与返回类型完全一致
                     if (!SameType(elem, target.ReturnType))
-                        throw new InvalidOperationException(
-                            $"ref __result 元素类型须与返回类型一致: 钩子 {elem.FullName} vs 目标 {target.ReturnType.FullName}");
-                    loads.Add(il.Create(OpCodes.Ldloca, v));
+                    {
+                        // 桥接: 类型须与返回类型同链(互为继承), 且返回类型为引用类型(castclass 只对引用类型合法)
+                        if (target.ReturnType.IsValueType
+                            || (!IsAssignableFrom(elem, target.ReturnType) && !IsAssignableFrom(target.ReturnType, elem)))
+                            throw new InvalidOperationException(
+                                $"ref __result 元素类型须与返回类型一致或同继承链: 钩子 {elem.FullName} vs 目标 {target.ReturnType.FullName}");
+                        var bridge = AddLocal(body, module.ImportReference(elem));
+                        loads.Add(il.Create(OpCodes.Ldloca, bridge));
+                        resultCopyBacks.Add(il.Create(OpCodes.Ldloc, bridge));
+                        resultCopyBacks.Add(il.Create(OpCodes.Castclass, target.ReturnType));
+                        resultCopyBacks.Add(il.Create(OpCodes.Stloc, v));
+                    }
+                    else
+                    {
+                        // ref __result 会写回返回值,元素类型必须与返回类型完全一致
+                        loads.Add(il.Create(OpCodes.Ldloca, v));
+                    }
                 }
                 else
                 {
@@ -280,6 +314,7 @@ void WeaveOne(PatchEntry p)
         var first = body.Instructions[0];
         var seq = BuildArgLoads(inPostfixEpilogue: false);
         seq.Add(il.Create(OpCodes.Call, hookRef));
+        seq.AddRange(resultCopyBacks);
         if (hookReturnsBool)
         {
             seq.Add(il.Create(OpCodes.Brtrue, first)); // true → 继续原方法
@@ -304,6 +339,7 @@ void WeaveOne(PatchEntry p)
         if (returnsValue) { EnsureResultVar(); epi.Add(il.Create(OpCodes.Stloc, resultVar)); }
         epi.AddRange(BuildArgLoads(inPostfixEpilogue: true));
         epi.Add(il.Create(OpCodes.Call, hookRef));
+        epi.AddRange(resultCopyBacks);
         if (returnsValue) epi.Add(il.Create(OpCodes.Ldloc, resultVar));
         epi.Add(il.Create(OpCodes.Ret));
         var epiHead = epi[0];
@@ -319,6 +355,194 @@ static VariableDefinition AddLocal(MethodBody body, TypeReference type)
     var v = new VariableDefinition(type);
     body.Variables.Add(v);
     return v;
+}
+
+// finalizer 语义: 原方法抛异常时调用钩子(绑定 __exception), 然后原样重抛。
+// 静态实现: 整个原方法体包 try, catch(Exception) 里 [存异常][加载参数][调钩子][重抛];
+// 原 ret 全部改写为 leave → 出口(IL 不允许 ret 位于 try 内)。
+void WeaveFinalizer(PatchEntry p, MethodDefinition target, MethodDefinition hook)
+{
+    var body = target.Body;
+    body.InitLocals = true;
+    body.SimplifyMacros();
+    var il = body.GetILProcessor();
+    var returnsValue = target.ReturnType.MetadataType != MetadataType.Void;
+
+    VariableDefinition resultVar = null!;
+    VariableDefinition EnsureResultVar()
+    {
+        if (!returnsValue) throw new InvalidOperationException("目标方法返回 void,钩子不能绑定 __result");
+        resultVar ??= AddLocal(body, target.ReturnType);
+        return resultVar;
+    }
+
+    var exType = module.ImportReference(typeof(Exception));
+    var exVar = AddLocal(body, exType);
+
+    List<Instruction> BuildFinalizerArgLoads()
+    {
+        var loads = new List<Instruction>();
+        foreach (var hp in hook.Parameters)
+        {
+            var name = hp.Name;
+            if (name == "__exception")
+            {
+                if (hp.ParameterType.FullName != "System.Exception")
+                    throw new InvalidOperationException($"finalizer __exception 参数类型须为 System.Exception: {hp.ParameterType.FullName}");
+                loads.Add(il.Create(OpCodes.Ldloc, exVar));
+            }
+            else if (name == "__instance")
+            {
+                if (target.IsStatic) throw new InvalidOperationException("静态目标方法无 __instance");
+                if (!IsAssignableFrom(hp.ParameterType, target.DeclaringType))
+                    throw new InvalidOperationException(
+                        $"__instance 类型不兼容: 钩子 {hp.ParameterType.FullName}，目标类型 {target.DeclaringType.FullName}(须为其基类/接口或 object)");
+                loads.Add(il.Create(OpCodes.Ldarg_0));
+            }
+            else if (name == "__result")
+            {
+                var v = EnsureResultVar();
+                if (!hp.ParameterType.IsByReference)
+                    throw new InvalidOperationException("finalizer 的 __result 必须是 ref");
+                var elem = ((ByReferenceType)hp.ParameterType).ElementType;
+                if (!SameType(elem, target.ReturnType))
+                    throw new InvalidOperationException(
+                        $"ref __result 元素类型须与返回类型一致: 钩子 {elem.FullName} vs 目标 {target.ReturnType.FullName}");
+                loads.Add(il.Create(OpCodes.Ldloca, v));
+            }
+            else
+            {
+                var op = target.Parameters.FirstOrDefault(x => x.Name == name)
+                    ?? throw new InvalidOperationException($"钩子参数 '{name}' 在目标方法中找不到同名参数");
+                if (hp.ParameterType.IsByReference || op.ParameterType.IsByReference)
+                {
+                    if (op.ParameterType.IsByReference && !hp.ParameterType.IsByReference)
+                        throw new InvalidOperationException($"钩子参数 '{name}' 不能以非 ref 形式绑定目标 ref 参数");
+                    var hookElem = hp.ParameterType.IsByReference ? ((ByReferenceType)hp.ParameterType).ElementType : hp.ParameterType;
+                    var tgtElem = op.ParameterType.IsByReference ? ((ByReferenceType)op.ParameterType).ElementType : op.ParameterType;
+                    if (!SameType(hookElem, tgtElem))
+                        throw new InvalidOperationException($"钩子参数 '{name}' 的 ref 元素类型须与目标一致");
+                }
+                else if (!IsAssignableFrom(hp.ParameterType, op.ParameterType))
+                    throw new InvalidOperationException(
+                        $"钩子参数 '{name}' 类型不兼容: 钩子 {hp.ParameterType.FullName} vs 目标 {op.ParameterType.FullName}");
+                loads.Add(hp.ParameterType.IsByReference && !op.ParameterType.IsByReference
+                    ? il.Create(OpCodes.Ldarga, op) : il.Create(OpCodes.Ldarg, op));
+            }
+        }
+        return loads;
+    }
+
+    var hookRef = RehomeHookReference(module.ImportReference(hook), module);
+
+    // 出口: [ldloc resultVar] ret — 所有原 ret 改为 leave 到这里
+    Instruction epiHead, epiRet;
+    if (returnsValue)
+    {
+        epiHead = il.Create(OpCodes.Ldloc, EnsureResultVar());
+        body.Instructions.Add(epiHead);
+        epiRet = il.Create(OpCodes.Ret);
+        body.Instructions.Add(epiRet);
+    }
+    else
+    {
+        epiHead = epiRet = il.Create(OpCodes.Ret);
+        body.Instructions.Add(epiHead);
+    }
+
+    // handler: stloc ex; 参数加载; call hook; [替换异常]; rethrow (位于出口之后, HandlerEnd=null 到方法末尾)
+    var hs = il.Create(OpCodes.Stloc, exVar);
+    body.Instructions.Add(hs);
+    foreach (var ins in BuildFinalizerArgLoads()) body.Instructions.Add(ins);
+    body.Instructions.Add(il.Create(OpCodes.Call, hookRef));
+    var hookReturnsException = hook.ReturnType.FullName == "System.Exception";
+    if (hookReturnsException)
+    {
+        // Harmony 替换语义: hook 返回非 null Exception → throw 新异常; 返回 null → rethrow 原异常。
+        // 注意: 不能用 dup(GC 引用在 catch handler 里 dup+分支会触发 RyuJIT/ILC 编译失败,实测)。
+        var ldNew = il.Create(OpCodes.Ldloc, exVar);
+        body.Instructions.Add(il.Create(OpCodes.Stloc, exVar));
+        body.Instructions.Add(ldNew);
+        var br = il.Create(OpCodes.Brtrue, ldNew);   // 目标稍后修正为 throw 前加载
+        body.Instructions.Add(br);
+        body.Instructions.Add(il.Create(OpCodes.Rethrow));
+        var ldThrow = il.Create(OpCodes.Ldloc, exVar);
+        body.Instructions.Add(ldThrow);
+        body.Instructions.Add(il.Create(OpCodes.Throw));
+        br.Operand = ldThrow;
+    }
+    else
+    {
+        body.Instructions.Add(il.Create(OpCodes.Rethrow));
+    }
+
+    body.ExceptionHandlers.Add(new ExceptionHandler(ExceptionHandlerType.Catch)
+    {
+        TryStart = body.Instructions[0],
+        TryEnd = epiHead,
+        HandlerStart = hs,
+        HandlerEnd = null,
+        CatchType = exType
+    });
+
+    foreach (var r in body.Instructions.Where(i => i.OpCode == OpCodes.Ret && i != epiHead && i != epiRet).ToList())
+    {
+        if (returnsValue) il.InsertBefore(r, il.Create(OpCodes.Stloc, resultVar));
+        r.OpCode = OpCodes.Leave; r.Operand = epiHead;
+    }
+    body.OptimizeMacros();
+    Console.WriteLine($"[OK] finalizer 语义已包裹: try[{body.Instructions[0].Offset:x4},{epiHead.Offset:x4}) catch → {p.HookType}.{p.HookMethod}");
+}
+
+// AccessTools.Method 语义: 沿继承链找第一个同名方法(任意可见性)
+static MethodDefinition? FindMethodByName(TypeDefinition type, string name)
+{
+    for (var t = type; t != null; t = t.BaseType?.Resolve())
+    {
+        var m = t.Methods.FirstOrDefault(x => x.Name == name);
+        if (m != null) return m;
+    }
+    return null;
+}
+
+// Cecil 导入钩子签名时的坑: mod 程序集里指向游戏类型的 TypeRef 作用域是"外部 sts2 程序集",
+// 导入进游戏模块后就成了自程序集引用(AssemblyRef 指向自己)——桌面 RyuJIT 与 NativeAOT ILC 都拒绝。
+// 修复: 把签名里所有指向本程序集(与目标模块同名)的类型引用重定位为目标模块自己的类型定义。
+static TypeReference RehomeToTarget(TypeReference t, ModuleDefinition target)
+{
+    switch (t)
+    {
+        case ByReferenceType br:
+            return new ByReferenceType(RehomeToTarget(br.ElementType, target));
+        case PointerType pt:
+            return new PointerType(RehomeToTarget(pt.ElementType, target));
+        case ArrayType at:
+            return new ArrayType(RehomeToTarget(at.ElementType, target), at.Rank);
+        case GenericInstanceType gi:
+            var g2 = new GenericInstanceType(RehomeToTarget(gi.ElementType, target));
+            foreach (var a in gi.GenericArguments) g2.GenericArguments.Add(RehomeToTarget(a, target));
+            return g2;
+        default:
+            if (t.Scope is AssemblyNameReference anr && anr.Name == target.Assembly.Name.Name)
+            {
+                var found = target.GetType(t.FullName);
+                if (found != null) return found;
+            }
+            return t;
+    }
+}
+
+static MethodReference RehomeHookReference(MethodReference hookRef, ModuleDefinition target)
+{
+    var rehomed = new MethodReference(hookRef.Name, RehomeToTarget(hookRef.ReturnType, target), hookRef.DeclaringType)
+    {
+        HasThis = hookRef.HasThis,
+        CallingConvention = hookRef.CallingConvention,
+        ExplicitThis = hookRef.ExplicitThis
+    };
+    foreach (var p in hookRef.Parameters)
+        rehomed.Parameters.Add(new ParameterDefinition(p.Name, p.Attributes, RehomeToTarget(p.ParameterType, target)));
+    return rehomed;
 }
 
 static bool InRange(MethodBody body, Instruction ins, Instruction start, Instruction end)
@@ -366,6 +590,154 @@ static bool IsAssignableFrom(TypeReference hookType, TypeReference targetType)
     return false;
 }
 
+int GenHarmonyManifest(string modPath, string gamePath, string outPath)
+{
+    var resolver = new DefaultAssemblyResolver();
+    resolver.AddSearchDirectory(Path.GetDirectoryName(Path.GetFullPath(modPath)));
+    resolver.AddSearchDirectory(Path.GetDirectoryName(Path.GetFullPath(gamePath)));
+    resolver.AddSearchDirectory(Path.GetDirectoryName(typeof(object).Assembly.Location));
+    // 读 HarmonyPatch 特性签名里的 HarmonyLib 枚举(MethodType)需要解析 0Harmony — 游戏安装目录里有
+    var gameDataDir = Environment.GetEnvironmentVariable("STS2_GAME_DATA_DIR");
+    if (gameDataDir != null) resolver.AddSearchDirectory(gameDataDir);
+    var modAsm = AssemblyDefinition.ReadAssembly(modPath, new ReaderParameters { AssemblyResolver = resolver, ReadWrite = true });
+    var gameAsm = AssemblyDefinition.ReadAssembly(gamePath, new ReaderParameters { AssemblyResolver = resolver });
+    var gameModule = gameAsm.MainModule;
+    var modModule = modAsm.MainModule;
+
+    var entries = new List<PatchEntry>();
+
+    foreach (var t in modModule.GetTypes().OrderBy(x => x.FullName))
+    {
+        var hp = t.CustomAttributes.FirstOrDefault(a => a.AttributeType.Name == "HarmonyPatch");
+        if (hp == null) continue;
+
+        int classPriority = 400;
+        var pr = t.CustomAttributes.FirstOrDefault(a => a.AttributeType.Name == "HarmonyPriority");
+        if (pr != null && pr.ConstructorArguments.Count > 0)
+            classPriority = Convert.ToInt32(pr.ConstructorArguments[0].Value);
+
+        var targets = new List<(string TypeFullName, string MethodName, List<string>? TargetParams)>();
+        if (hp.ConstructorArguments.Count > 0)
+        {
+            var arg0 = hp.ConstructorArguments[0].Value;
+            string typeName = arg0 is TypeReference tr ? tr.FullName : (string)arg0!;
+            if (gameModule.GetType(typeName) == null)
+            {
+                Console.Error.WriteLine($"[GEN][WARN] 目标类型不在游戏程序集,跳过: {typeName} ({t.FullName})");
+                continue;
+            }
+            string? methodName = hp.ConstructorArguments.Count > 1 ? (string?)hp.ConstructorArguments[1].Value : null;
+            List<string>? targetParams = null;
+            int methodType = 0;
+            if (hp.ConstructorArguments.Count > 2)
+            {
+                if (hp.ConstructorArguments[2].Value is CustomAttributeArgument[] arr)
+                    targetParams = arr.Select(x => ((TypeReference)x.Value!).FullName).ToList();
+                else
+                    methodType = Convert.ToInt32(hp.ConstructorArguments[2].Value);
+            }
+            methodName = methodType switch
+            {
+                0 => methodName,           // Normal
+                1 => "get_" + methodName,  // Getter
+                2 => "set_" + methodName,  // Setter
+                3 => ".ctor",              // Constructor
+                4 => ".cctor",             // StaticConstructor
+                6 => methodName,           // Async
+                _ => throw new InvalidOperationException($"未知 MethodType {methodType} in {t.FullName}")
+            };
+            if (methodName == null) throw new InvalidOperationException($"[GEN] {t.FullName} 无目标方法名");
+            targets.Add((typeName, methodName, targetParams));
+        }
+        else
+        {
+            // [HarmonyPatch()] 空特性类: 目标由 TargetMethod()/TargetMethods() 运行时反射给出,在构建期静态解析。
+            // 支持两种 mod 实际用到的模式:
+            //   A. AccessTools.TypeByName("X") + AccessTools.Method(t, "Y") → 单个目标 (X 类型全名, Y 方法名)
+            //   B. WatcherHookCompat.FindHookMethods("Name") → 游戏 Hook 类的公开静态同名 Task 方法 (多个目标);
+            //      钩子名可能是 TargetMethods 方法体内的 ldstr,也可能是类的 const string 字段
+            var tm = t.Methods.FirstOrDefault(m => (m.Name == "TargetMethods" || m.Name == "TargetMethod") && m.IsStatic);
+            var strings = new List<string>();
+            if (tm is { HasBody: true })
+                foreach (var ins in tm.Body.Instructions)
+                    if (ins.OpCode == OpCodes.Ldstr && ins.Operand is string s)
+                        strings.Add(s);
+            // 兜底: const string 字段(如 private const string HookName = "...")
+            if (strings.Count == 0)
+            {
+                var constField = t.Fields.FirstOrDefault(f => f.IsLiteral && f.InitialValue.Length > 0);
+                if (constField != null && constField.Constant is string cs)
+                    strings.Add(cs);
+            }
+            if (strings.Count == 0)
+            {
+                Console.Error.WriteLine($"[GEN][WARN] TargetMethod(s) 取不到字符串常量,跳过: {t.FullName}");
+                continue;
+            }
+            if (strings.Count >= 2 && gameModule.GetType(strings[0]) != null)
+            {
+                // 模式 A: 类型全名 + 方法名
+                var typeDef = gameModule.GetType(strings[0])!;
+                var mm = FindMethodByName(typeDef, strings[1])
+                    ?? throw new InvalidOperationException($"[GEN] 模式A 找不到方法 {strings[0]}.{strings[1]} ({t.FullName})");
+                targets.Add((typeDef.FullName, mm.Name, null));
+                Console.WriteLine($"[GEN] {t.FullName} → {typeDef.FullName}.{mm.Name} (TargetMethod 静态解析)");
+            }
+            else
+            {
+                // 模式 B: Hook 钩子名
+                string hookName = strings[0];
+                var hookType = gameModule.GetType("MegaCrit.Sts2.Core.Hooks.Hook")
+                    ?? throw new InvalidOperationException("游戏里找不到 MegaCrit.Sts2.Core.Hooks.Hook");
+                var matches = hookType.Methods.Where(m => m.IsStatic && m.IsPublic && m.Name == hookName
+                    && m.ReturnType.FullName.StartsWith("System.Threading.Tasks.Task")).ToList();
+                foreach (var m in matches)
+                    targets.Add((hookType.FullName, m.Name, null));
+                Console.WriteLine($"[GEN] {t.FullName} → Hook.{hookName} x{matches.Count}");
+            }
+        }
+
+        foreach (var m in t.Methods.Where(m => m.IsStatic))
+        {
+            string? kind = m.Name switch { "Prefix" => "prefix", "Postfix" => "postfix", "Finalizer" => "finalizer", _ => null };
+            kind ??= m.CustomAttributes.Any(a => a.AttributeType.Name == "HarmonyPrefix") ? "prefix" : null;
+            kind ??= m.CustomAttributes.Any(a => a.AttributeType.Name == "HarmonyPostfix") ? "postfix" : null;
+            kind ??= m.CustomAttributes.Any(a => a.AttributeType.Name == "HarmonyFinalizer") ? "finalizer" : null;
+            if (kind == null) continue;
+
+            int priority = classPriority;
+            var mp = m.CustomAttributes.FirstOrDefault(a => a.AttributeType.Name == "HarmonyPriority");
+            if (mp != null && mp.ConstructorArguments.Count > 0)
+                priority = Convert.ToInt32(mp.ConstructorArguments[0].Value);
+
+            foreach (var (typeFullName, methodName, targetParams) in targets)
+                entries.Add(new PatchEntry(typeFullName, methodName, kind, t.FullName, m.Name, targetParams, priority));
+
+            // 跨程序集 call 需要 public: 翻转钩子方法与声明类型,写回 mod.dll
+            if (!m.IsPublic) { m.IsPublic = true; Console.WriteLine($"[GEN] flip method public: {t.FullName}.{m.Name}"); }
+            if (!t.IsPublic) { t.IsPublic = true; Console.WriteLine($"[GEN] flip type public: {t.FullName}"); }
+        }
+    }
+
+    // 引导条目: ModManager.Initialize 完成后挂载 pck 并初始化
+    entries.Add(new PatchEntry("MegaCrit.Sts2.Core.Modding.ModManager", "Initialize", "postfix",
+        "WatcherMod.WatcherBootstrap", "ModManagerInitializePostfix", null, 0));
+
+    // 排序: 同目标同 kind 按 Harmony 语义 — prefix 高优先级先跑(weaver 前插,低优先级先插入即高优先级在前);
+    // postfix 低优先级先跑(插入序即运行序)。统一升序即可。
+    entries = entries
+        .OrderBy(e => e.TargetType).ThenBy(e => e.TargetMethod)
+        .ThenBy(e => e.Kind == "prefix" ? 0 : e.Kind == "finalizer" ? 1 : 2)
+        .ThenBy(e => e.Priority)
+        .ToList();
+
+    File.WriteAllText(outPath, JsonSerializer.Serialize(new Manifest(entries),
+        new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+    modAsm.Write();
+    Console.WriteLine($"完成: {entries.Count} 条目 → {outPath} (mod dll 已写回 public 翻转)");
+    return 0;
+}
+
 record Manifest(List<PatchEntry> Patches, List<StripEntry>? StripReadonly = null, List<ConstEntry>? PatchConsts = null, List<RedirectEntry>? RedirectCalls = null);
 // GenericArg: 可选 — 匹配泛型实例调用(如 NextItem<NEventOptionButton>), 按泛型实参全名过滤
 record RedirectEntry(string NamespacePrefix, string TargetType, string TargetMethod, string HookType, string HookMethod, string? GenericArg = null);
@@ -373,4 +745,12 @@ record StripEntry(string Type, List<string> Fields);
 // MethodContains: 匹配方法名或嵌套类型名(async 状态机如 <PlayRunAsync>d__N)
 record ConstEntry(string Type, int FromInt, int ToInt, string? MethodContains = null);
 // TargetParams: 可选, 重载消歧用 — 按参数类型名(FullName 或简单名)匹配。null=方法名唯一时直接用。
-record PatchEntry(string TargetType, string TargetMethod, string Kind, string HookType, string HookMethod, List<string>? TargetParams = null);
+// Priority: Harmony 优先级, 同目标同 kind 排序用(prefix 高优先级先跑, postfix 低优先级先跑)
+record PatchEntry(string TargetType, string TargetMethod, string Kind, string HookType, string HookMethod, List<string>? TargetParams = null, int Priority = 400);
+
+// --gen: 从 mod 程序集提取 [HarmonyPatch] 生成织入清单。
+// 1) 解析目标: typeof/字符串 + MethodType(Normal/Getter/Setter/…) + argumentTypes(→targetParams);
+//    [HarmonyPatch()] 空特性类走 TargetMethods() 运行时反射 — 按 mod 的 FindHookMethods 约定
+//    (游戏 MegaCrit.Sts2.Core.Hooks.Hook 类的公开静态同名 Task 方法) 在构建期静态解析。
+// 2) 钩子方法(Prefix/Postfix/Finalizer)与声明类型翻成 public — 跨程序集 call 需要。
+// 3) 写回 mod.dll, 输出 manifest(含 ModManager.Initialize → WatcherBootstrap.ModManagerInitializePostfix 引导条目)。
