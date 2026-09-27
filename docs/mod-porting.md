@@ -80,10 +80,25 @@ Harmony Finalizer（原方法抛异常时执行、返回非 null `Exception` 可
 
 - 171 处 Roslyn 内部类型 `<>z__ReadOnlyArray/List` 包装器还原为普通数组；
 - 3 个反编译失败的迭代器按原始 IL 重写为 `yield`（`FlattenDamageResults` 等）；
+- **7 个丢失 `override` 的虚方法补回**（详见下方"反编译陷阱"）：
+  6 个 `ModifyDamageAdditive/Multiplicative`（Wrath 愤怒/Divinity 神格/Confusion/Restful/BlessProphecy/WatcherEnchantStackHookProxy）
+  + `Watcher.GenerateAnimator`（`virtual`→`override` 虚槽修复）；
 - `WatcherBootstrap.Init` 去掉 MonoMod 预载/Harmony/`GetTypes()` 反射循环，保留订阅与模型注册；
   新增 `ModManagerInitializePostfix()`：挂载 `user://Watcher.pck` + 调 `Init()`；
 - 删掉 Android 专属回退（`SceneTreeListener`、`InjectDarvVioletLotus`——iOS 无跳过补丁，不需要回退）；
 - 2 个 `[HarmonyPatch()]` + `TargetMethod()` 反射目标（MegaSpine）由 `--gen` 构建期解析。
+
+### 6. 反编译陷阱：override 丢失（重要）
+
+反编译时若参考程序集版本与 mod 构建时不同（本项目的教训：反编译时 game-refs 还是 9 月 1 日
+游戏更新前的旧版，虚方法基类签名不匹配），ILSpy 无法识别 override，会把 `override` 关键字丢掉：
+- 重编译后虚方法退化成普通方法——游戏对 `AbstractModel.ModifyDamageMultiplicative` 等基类
+  虚方法的 callvirt 全部落到基类默认实现（×1），**观者的愤怒/神格姿态伤害倍率完全失效**；
+- 或把 override 反编译成 `virtual`（newslot），虚槽错位，同样失效。
+
+**必须做全量元数据比对**：用 Cecil 对比原始 mod dll 与重编译 dll 的每个方法——
+虚标志（IsVirtual/IsNewSlot/IsFinal/IsReuseSlot）、接口列表、参数/返回类型签名。
+本项目比对结果：7 处虚方法损坏全部修复后为 0 差异（唯一保留差异是刻意的 FieldRefAccess→FieldInfo 替换）。
 
 ## 更新 mod / 移植其他 mod
 

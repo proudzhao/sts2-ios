@@ -10359,7 +10359,7 @@ public sealed class WatcherEnchantStackHookProxy : AbstractModel
 		return num - block;
 	}
 
-	public decimal ModifyDamageAdditive(Creature? target, decimal amount, ValueProp props, Creature? dealer, CardModel? cardSource, CardPlay? cardPlay)
+	public override decimal ModifyDamageAdditive(Creature? target, decimal amount, ValueProp props, Creature? dealer, CardModel? cardSource, CardPlay? cardPlay)
 	{
 		if (cardSource == null)
 		{
@@ -16622,7 +16622,7 @@ public sealed class BlessProphecyDamagePower : PowerModel
 
 	public override PowerStackType StackType => PowerStackType.Counter;
 
-	public decimal ModifyDamageAdditive(Creature? target, decimal amount, ValueProp props, Creature? dealer, CardModel? cardSource, CardPlay? cardPlay)
+	public override decimal ModifyDamageAdditive(Creature? target, decimal amount, ValueProp props, Creature? dealer, CardModel? cardSource, CardPlay? cardPlay)
 	{
 		if (dealer != base.Owner)
 		{
@@ -16693,7 +16693,7 @@ public sealed class ConfusionPower : PowerModel
 
 	protected override IEnumerable<DynamicVar> CanonicalVars => new DynamicVar[] { new DynamicVar("DamageIncrease", 1.5m) };
 
-	public decimal ModifyDamageMultiplicative(Creature? target, decimal amount, ValueProp props, Creature? dealer, CardModel? cardSource, CardPlay? cardPlay)
+	public override decimal ModifyDamageMultiplicative(Creature? target, decimal amount, ValueProp props, Creature? dealer, CardModel? cardSource, CardPlay? cardPlay)
 	{
 		if (target != base.Owner)
 		{
@@ -17591,7 +17591,7 @@ public sealed class Wrath : PowerModel
 		await Task.CompletedTask;
 	}
 
-	public decimal ModifyDamageMultiplicative(Creature? target, decimal amount, ValueProp props, Creature? dealer, CardModel? cardSource, CardPlay? cardPlay)
+	public override decimal ModifyDamageMultiplicative(Creature? target, decimal amount, ValueProp props, Creature? dealer, CardModel? cardSource, CardPlay? cardPlay)
 	{
 		bool flag = props.HasFlag(ValueProp.Move) && !props.HasFlag(ValueProp.Unpowered);
 		if (dealer == base.Owner && flag)
@@ -17709,7 +17709,7 @@ public sealed class Divinity : PowerModel
 		await Task.CompletedTask;
 	}
 
-	public decimal ModifyDamageMultiplicative(Creature? target, decimal amount, ValueProp props, Creature? dealer, CardModel? cardSource, CardPlay? cardPlay)
+	public override decimal ModifyDamageMultiplicative(Creature? target, decimal amount, ValueProp props, Creature? dealer, CardModel? cardSource, CardPlay? cardPlay)
 	{
 		bool flag = props.HasFlag(ValueProp.Move) && !props.HasFlag(ValueProp.Unpowered);
 		if (dealer == base.Owner && flag)
@@ -18347,7 +18347,7 @@ public sealed class RestfulPower : PowerModel
 
 	protected override IEnumerable<IHoverTip> ExtraHoverTips => new IHoverTip[] { HoverTipFactory.FromPower<Calm>(null) };
 
-	public decimal ModifyDamageMultiplicative(Creature? target, decimal amount, ValueProp props, Creature? dealer, CardModel? cardSource, CardPlay? cardPlay)
+	public override decimal ModifyDamageMultiplicative(Creature? target, decimal amount, ValueProp props, Creature? dealer, CardModel? cardSource, CardPlay? cardPlay)
 	{
 		if (target != base.Owner || dealer == base.Owner || amount <= 0m || !WatcherCombatHelper.IsInStance<Calm>(base.Owner))
 		{
@@ -19007,7 +19007,7 @@ public class Watcher : CharacterModel
 		return list;
 	}
 
-	public virtual CreatureAnimator GenerateAnimator(MegaSprite controller, Creature creature)
+	public override CreatureAnimator GenerateAnimator(MegaSprite controller, Creature creature)
 	{
 		string characterSkeletonDataPath = CharacterSkeletonDataPath;
 		if (characterSkeletonDataPath != null)
